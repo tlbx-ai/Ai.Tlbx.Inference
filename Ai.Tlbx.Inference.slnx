@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Ai.Tlbx.Inference/Ai.Tlbx.Inference.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Ai.Tlbx.Inference.Tests/Ai.Tlbx.Inference.Tests.csproj" />
+  </Folder>
+</Solution>
