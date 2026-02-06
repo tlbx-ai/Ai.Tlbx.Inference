@@ -1,16 +1,14 @@
+using System.Buffers;
+using System.Net.Http.Headers;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 
 namespace Ai.Tlbx.Inference.Providers;
 
 internal sealed class AnthropicProvider : IProvider
 {
-    private static readonly JsonSerializerOptions _jsonOptions = new()
-    {
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-    };
-
     private readonly ProviderRequestContext _context;
 
     public AnthropicProvider(ProviderRequestContext context)
@@ -21,24 +19,24 @@ internal sealed class AnthropicProvider : IProvider
     public async Task<ProviderResponse> CompleteAsync(ProviderRequest request, CancellationToken ct)
     {
         var body = BuildRequestBody(request, stream: false);
-        var json = JsonSerializer.Serialize(body, _jsonOptions);
+        var jsonBytes = SerializeToUtf8Bytes(body);
 
         _context.Log?.Invoke(InferenceLogLevel.Debug, $"Request to {_context.BaseUrl}/v1/messages");
 
-        using var httpRequest = CreateHttpRequest(json);
+        using var httpRequest = CreateHttpRequest(jsonBytes);
         using var response = await _context.HttpClient.SendAsync(httpRequest, ct).ConfigureAwait(false);
-
-        var responseBody = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
 
         if (!response.IsSuccessStatusCode)
         {
+            var errorBody = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
             throw new HttpRequestException(
-                $"Anthropic request failed with status {response.StatusCode}: {responseBody}",
+                $"Anthropic request failed with status {response.StatusCode}: {errorBody}",
                 null,
                 response.StatusCode);
         }
 
-        using var doc = JsonDocument.Parse(responseBody);
+        using var responseStream = await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
+        using var doc = await JsonDocument.ParseAsync(responseStream, cancellationToken: ct).ConfigureAwait(false);
         var root = doc.RootElement;
 
         var contentBuilder = new StringBuilder();
@@ -87,11 +85,11 @@ internal sealed class AnthropicProvider : IProvider
         [EnumeratorCancellation] CancellationToken ct)
     {
         var body = BuildRequestBody(request, stream: true);
-        var json = JsonSerializer.Serialize(body, _jsonOptions);
+        var jsonBytes = SerializeToUtf8Bytes(body);
 
         _context.Log?.Invoke(InferenceLogLevel.Debug, $"Stream request to {_context.BaseUrl}/v1/messages");
 
-        using var httpRequest = CreateHttpRequest(json);
+        using var httpRequest = CreateHttpRequest(jsonBytes);
         using var response = await _context.HttpClient.SendAsync(
             httpRequest,
             HttpCompletionOption.ResponseHeadersRead,
@@ -265,9 +263,9 @@ internal sealed class AnthropicProvider : IProvider
     public Task<byte[]> GenerateImageAsync(ProviderImageRequest request, CancellationToken ct)
         => throw new NotSupportedException("Anthropic does not support image generation.");
 
-    private Dictionary<string, object?> BuildRequestBody(ProviderRequest request, bool stream)
+    private JsonObject BuildRequestBody(ProviderRequest request, bool stream)
     {
-        var messages = new List<object>();
+        var messages = new JsonArray();
 
         foreach (var msg in request.Messages)
         {
@@ -275,89 +273,76 @@ internal sealed class AnthropicProvider : IProvider
             {
                 case ChatRole.User when msg.Attachments is { Count: > 0 }:
                 {
-                    var parts = new List<object>();
+                    var parts = new JsonArray();
 
                     foreach (var attachment in msg.Attachments)
                     {
-                        var base64 = Convert.ToBase64String(attachment.Content.ToArray());
+                        var base64 = Convert.ToBase64String(attachment.Content.Span);
+                        var contentType = attachment.MimeType.StartsWith("image/", StringComparison.OrdinalIgnoreCase)
+                            ? "image"
+                            : "document";
 
-                        if (attachment.MimeType.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
+                        parts.Add((JsonNode)new JsonObject
                         {
-                            parts.Add(new
+                            ["type"] = contentType,
+                            ["source"] = new JsonObject
                             {
-                                type = "image",
-                                source = new
-                                {
-                                    type = "base64",
-                                    media_type = attachment.MimeType,
-                                    data = base64,
-                                },
-                            });
-                        }
-                        else
-                        {
-                            parts.Add(new
-                            {
-                                type = "document",
-                                source = new
-                                {
-                                    type = "base64",
-                                    media_type = attachment.MimeType,
-                                    data = base64,
-                                },
-                            });
-                        }
+                                ["type"] = "base64",
+                                ["media_type"] = attachment.MimeType,
+                                ["data"] = base64,
+                            },
+                        });
                     }
 
                     if (!string.IsNullOrEmpty(msg.Content))
                     {
-                        parts.Add(new { type = "text", text = msg.Content });
+                        parts.Add((JsonNode)new JsonObject { ["type"] = "text", ["text"] = msg.Content });
                     }
 
-                    messages.Add(new { role = "user", content = parts });
+                    messages.Add((JsonNode)new JsonObject { ["role"] = "user", ["content"] = parts });
                     break;
                 }
 
                 case ChatRole.User:
-                    messages.Add(new { role = "user", content = msg.Content ?? "" });
+                    messages.Add((JsonNode)new JsonObject { ["role"] = "user", ["content"] = msg.Content ?? "" });
                     break;
 
                 case ChatRole.Assistant when msg.ToolCalls is { Count: > 0 }:
                 {
-                    var parts = new List<object>();
+                    var parts = new JsonArray();
                     if (!string.IsNullOrEmpty(msg.Content))
                     {
-                        parts.Add(new { type = "text", text = msg.Content });
+                        parts.Add((JsonNode)new JsonObject { ["type"] = "text", ["text"] = msg.Content });
                     }
                     foreach (var tc in msg.ToolCalls)
                     {
-                        parts.Add(new
+                        parts.Add((JsonNode)new JsonObject
                         {
-                            type = "tool_use",
-                            id = tc.Id,
-                            name = tc.Name,
-                            input = JsonSerializer.Deserialize<JsonElement>(tc.Arguments),
+                            ["type"] = "tool_use",
+                            ["id"] = tc.Id,
+                            ["name"] = tc.Name,
+                            ["input"] = JsonNode.Parse(tc.Arguments),
                         });
                     }
-                    messages.Add(new { role = "assistant", content = parts });
+                    messages.Add((JsonNode)new JsonObject { ["role"] = "assistant", ["content"] = parts });
                     break;
                 }
 
                 case ChatRole.Assistant:
-                    messages.Add(new { role = "assistant", content = msg.Content ?? "" });
+                    messages.Add((JsonNode)new JsonObject { ["role"] = "assistant", ["content"] = msg.Content ?? "" });
                     break;
 
                 case ChatRole.Tool:
-                    messages.Add(new
+                    messages.Add((JsonNode)new JsonObject
                     {
-                        role = "user",
-                        content = new[]
+                        ["role"] = "user",
+                        ["content"] = new JsonArray
                         {
-                            new
+                            (JsonNode)new JsonObject
                             {
-                                type = "tool_result",
-                                tool_use_id = msg.ToolCallId,
-                                content = msg.Content ?? "",
+                                ["type"] = "tool_result",
+                                ["tool_use_id"] = msg.ToolCallId,
+                                ["content"] = msg.Content ?? "",
                             },
                         },
                     });
@@ -365,7 +350,7 @@ internal sealed class AnthropicProvider : IProvider
             }
         }
 
-        var body = new Dictionary<string, object?>
+        var body = new JsonObject
         {
             ["model"] = request.ModelApiName,
             ["max_tokens"] = request.MaxTokens ?? 8192,
@@ -376,13 +361,13 @@ internal sealed class AnthropicProvider : IProvider
         {
             if (request.EnableCache)
             {
-                body["system"] = new[]
+                body["system"] = new JsonArray
                 {
-                    new
+                    (JsonNode)new JsonObject
                     {
-                        type = "text",
-                        text = request.SystemMessage,
-                        cache_control = new { type = "ephemeral" },
+                        ["type"] = "text",
+                        ["text"] = request.SystemMessage,
+                        ["cache_control"] = new JsonObject { ["type"] = "ephemeral" },
                     },
                 };
             }
@@ -404,15 +389,20 @@ internal sealed class AnthropicProvider : IProvider
 
         if (request.StopSequences is { Count: > 0 })
         {
-            body["stop_sequences"] = request.StopSequences;
+            var stopArray = new JsonArray();
+            foreach (var seq in request.StopSequences)
+            {
+                stopArray.Add((JsonNode)JsonValue.Create(seq)!);
+            }
+            body["stop_sequences"] = stopArray;
         }
 
         if (request.ThinkingBudget.HasValue)
         {
-            body["thinking"] = new
+            body["thinking"] = new JsonObject
             {
-                type = "enabled",
-                budget_tokens = request.ThinkingBudget.Value,
+                ["type"] = "enabled",
+                ["budget_tokens"] = request.ThinkingBudget.Value,
             };
 
             var maxTokens = request.MaxTokens ?? 8192;
@@ -424,29 +414,31 @@ internal sealed class AnthropicProvider : IProvider
 
         if (request.Tools is { Count: > 0 })
         {
-            body["tools"] = request.Tools.Select(t => new
+            var toolsArray = new JsonArray();
+            foreach (var t in request.Tools)
             {
-                name = t.Name,
-                description = t.Description,
-                input_schema = t.ParametersSchema,
-            }).ToList();
+                toolsArray.Add((JsonNode)new JsonObject
+                {
+                    ["name"] = t.Name,
+                    ["description"] = t.Description,
+                    ["input_schema"] = JsonNode.Parse(t.ParametersSchema.GetRawText()),
+                });
+            }
+            body["tools"] = toolsArray;
         }
 
         if (request.JsonSchema is not null)
         {
-            using var schemaDoc = JsonDocument.Parse(request.JsonSchema);
-            var toolList = new List<object>
+            body["tools"] = new JsonArray
             {
-                new
+                (JsonNode)new JsonObject
                 {
-                    name = "json_response",
-                    description = "Respond with structured JSON matching the provided schema.",
-                    input_schema = schemaDoc.RootElement.Clone(),
+                    ["name"] = "json_response",
+                    ["description"] = "Respond with structured JSON matching the provided schema.",
+                    ["input_schema"] = JsonNode.Parse(request.JsonSchema),
                 },
             };
-
-            body["tools"] = toolList;
-            body["tool_choice"] = new { type = "tool", name = "json_response" };
+            body["tool_choice"] = new JsonObject { ["type"] = "tool", ["name"] = "json_response" };
         }
 
         if (stream)
@@ -457,13 +449,22 @@ internal sealed class AnthropicProvider : IProvider
         return body;
     }
 
-    private HttpRequestMessage CreateHttpRequest(string json)
+    private static ReadOnlyMemory<byte> SerializeToUtf8Bytes(JsonObject body)
+    {
+        var buffer = new ArrayBufferWriter<byte>();
+        using var writer = new Utf8JsonWriter(buffer);
+        body.WriteTo(writer);
+        writer.Flush();
+        return buffer.WrittenMemory;
+    }
+
+    private HttpRequestMessage CreateHttpRequest(ReadOnlyMemory<byte> jsonBytes)
     {
         var httpRequest = new HttpRequestMessage(HttpMethod.Post, $"{_context.BaseUrl}/v1/messages")
         {
-            Content = new StringContent(json, Encoding.UTF8, "application/json"),
+            Content = new ReadOnlyMemoryContent(jsonBytes),
         };
-
+        httpRequest.Content.Headers.ContentType = new MediaTypeHeaderValue("application/json") { CharSet = "utf-8" };
         httpRequest.Headers.TryAddWithoutValidation("x-api-key", _context.ApiKey);
         httpRequest.Headers.TryAddWithoutValidation("anthropic-version", "2023-06-01");
 

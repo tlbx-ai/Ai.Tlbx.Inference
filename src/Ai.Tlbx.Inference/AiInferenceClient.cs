@@ -1,5 +1,7 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
+using System.Text.Json.Serialization.Metadata;
 using Ai.Tlbx.Inference.Configuration;
 using Ai.Tlbx.Inference.Providers;
 using Ai.Tlbx.Inference.Resilience;
@@ -46,6 +48,8 @@ public sealed class AiInferenceClient : IAiInferenceClient
         };
     }
 
+    [RequiresUnreferencedCode("Use the overload accepting JsonTypeInfo<T> for AOT compatibility.")]
+    [RequiresDynamicCode("Use the overload accepting JsonTypeInfo<T> for AOT compatibility.")]
     public async Task<CompletionResponse<T>> CompleteAsync<T>(CompletionRequest request, CancellationToken ct = default)
     {
         if (typeof(T) == typeof(string))
@@ -54,12 +58,37 @@ public sealed class AiInferenceClient : IAiInferenceClient
             return (CompletionResponse<T>)(object)stringResult;
         }
 
-        var schema = request.JsonSchema ?? JsonSchemaGenerator.Generate(typeof(T)).GetRawText();
+        var schema = request.JsonSchema ?? JsonSchemaGenerator.GenerateAsString(typeof(T));
         var provider = GetProvider(request.Model.GetProvider());
         var providerRequest = BuildProviderRequest(request, schema);
         var response = await provider.CompleteAsync(providerRequest, ct).ConfigureAwait(false);
 
         var content = JsonSerializer.Deserialize<T>(response.Content, _jsonOptions)!;
+
+        return new CompletionResponse<T>
+        {
+            Content = content,
+            Usage = response.Usage,
+            Model = request.Model,
+            StopReason = response.StopReason,
+        };
+    }
+
+    public async Task<CompletionResponse<T>> CompleteAsync<T>(CompletionRequest request, JsonTypeInfo<T> jsonTypeInfo, CancellationToken ct = default)
+    {
+        if (typeof(T) == typeof(string))
+        {
+            var stringResult = await CompleteAsync(request, ct).ConfigureAwait(false);
+            return (CompletionResponse<T>)(object)stringResult;
+        }
+
+        var schema = request.JsonSchema
+            ?? throw new InvalidOperationException("CompletionRequest.JsonSchema must be provided for AOT-compatible structured output.");
+        var provider = GetProvider(request.Model.GetProvider());
+        var providerRequest = BuildProviderRequest(request, schema);
+        var response = await provider.CompleteAsync(providerRequest, ct).ConfigureAwait(false);
+
+        var content = JsonSerializer.Deserialize(response.Content, jsonTypeInfo)!;
 
         return new CompletionResponse<T>
         {
@@ -86,6 +115,8 @@ public sealed class AiInferenceClient : IAiInferenceClient
         }
     }
 
+    [RequiresUnreferencedCode("Use the overload accepting JsonTypeInfo<T> for AOT compatibility.")]
+    [RequiresDynamicCode("Use the overload accepting JsonTypeInfo<T> for AOT compatibility.")]
     public async Task<ToolExecutionResponse<T>> CompleteWithToolsAsync<T>(
         CompletionRequest request,
         IReadOnlyList<ToolDefinition> tools,
@@ -97,11 +128,12 @@ public sealed class AiInferenceClient : IAiInferenceClient
         var messages = new List<ChatMessage>(request.Messages);
         var totalUsage = new TokenUsage();
         var iterations = 0;
+        var baseReq = BuildProviderRequest(request, tools: tools);
 
         while (iterations < maxIterations)
         {
             iterations++;
-            var providerReq = BuildProviderRequest(request with { Messages = messages }, tools: tools);
+            var providerReq = baseReq with { Messages = messages };
             var response = await provider.CompleteAsync(providerReq, ct).ConfigureAwait(false);
             totalUsage += response.Usage;
 
@@ -110,6 +142,64 @@ public sealed class AiInferenceClient : IAiInferenceClient
                 var content = typeof(T) == typeof(string)
                     ? (T)(object)response.Content
                     : JsonSerializer.Deserialize<T>(response.Content, _jsonOptions)!;
+
+                return new ToolExecutionResponse<T>
+                {
+                    Content = content,
+                    Usage = totalUsage,
+                    Iterations = iterations,
+                    Messages = messages,
+                };
+            }
+
+            messages.Add(new ChatMessage
+            {
+                Role = ChatRole.Assistant,
+                Content = response.Content,
+                ToolCalls = response.ToolCalls,
+            });
+
+            foreach (var toolCall in response.ToolCalls)
+            {
+                var result = await toolExecutor(toolCall).ConfigureAwait(false);
+                messages.Add(new ChatMessage
+                {
+                    Role = ChatRole.Tool,
+                    ToolCallId = result.ToolCallId,
+                    Content = result.Result,
+                });
+            }
+        }
+
+        throw new InvalidOperationException($"Tool execution exceeded {maxIterations} iterations");
+    }
+
+    public async Task<ToolExecutionResponse<T>> CompleteWithToolsAsync<T>(
+        CompletionRequest request,
+        IReadOnlyList<ToolDefinition> tools,
+        Func<ToolCallRequest, Task<ToolCallResult>> toolExecutor,
+        JsonTypeInfo<T> jsonTypeInfo,
+        int maxIterations = 20,
+        CancellationToken ct = default)
+    {
+        var provider = GetProvider(request.Model.GetProvider());
+        var messages = new List<ChatMessage>(request.Messages);
+        var totalUsage = new TokenUsage();
+        var iterations = 0;
+        var baseReq = BuildProviderRequest(request, tools: tools);
+
+        while (iterations < maxIterations)
+        {
+            iterations++;
+            var providerReq = baseReq with { Messages = messages };
+            var response = await provider.CompleteAsync(providerReq, ct).ConfigureAwait(false);
+            totalUsage += response.Usage;
+
+            if (response.ToolCalls is null or { Count: 0 })
+            {
+                var content = typeof(T) == typeof(string)
+                    ? (T)(object)response.Content
+                    : JsonSerializer.Deserialize(response.Content, jsonTypeInfo)!;
 
                 return new ToolExecutionResponse<T>
                 {
@@ -153,11 +243,12 @@ public sealed class AiInferenceClient : IAiInferenceClient
         var messages = new List<ChatMessage>(request.Messages);
         var totalUsage = new TokenUsage();
         var iterations = 0;
+        var baseReq = BuildProviderRequest(request, tools: tools);
 
         while (iterations < maxIterations)
         {
             iterations++;
-            var providerReq = BuildProviderRequest(request with { Messages = messages }, tools: tools);
+            var providerReq = baseReq with { Messages = messages };
 
             var pendingToolCalls = new List<ToolCallRequest>();
             var contentBuilder = new System.Text.StringBuilder();
@@ -185,7 +276,7 @@ public sealed class AiInferenceClient : IAiInferenceClient
 
             if (streamUsage is not null)
             {
-                totalUsage += streamUsage;
+                totalUsage += streamUsage.Value;
             }
 
             if (pendingToolCalls.Count == 0)

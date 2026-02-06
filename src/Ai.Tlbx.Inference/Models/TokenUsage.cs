@@ -1,6 +1,6 @@
 namespace Ai.Tlbx.Inference;
 
-public sealed record TokenUsage
+public readonly record struct TokenUsage
 {
     public int InputTokens { get; init; }
     public int OutputTokens { get; init; }

@@ -1,24 +1,44 @@
 using System.Collections;
+using System.Collections.Concurrent;
+using System.Diagnostics.CodeAnalysis;
 using System.Reflection;
+using System.Text;
 using System.Text.Json;
 
 namespace Ai.Tlbx.Inference.Schema;
 
 internal static class JsonSchemaGenerator
 {
+    private static readonly ConcurrentDictionary<Type, string> _cache = new();
+
+    [RequiresUnreferencedCode("JSON schema generation uses reflection. For AOT, provide CompletionRequest.JsonSchema directly.")]
+    [RequiresDynamicCode("JSON schema generation uses reflection. For AOT, provide CompletionRequest.JsonSchema directly.")]
     public static JsonElement Generate<T>() => Generate(typeof(T));
 
+    [RequiresUnreferencedCode("JSON schema generation uses reflection. For AOT, provide CompletionRequest.JsonSchema directly.")]
+    [RequiresDynamicCode("JSON schema generation uses reflection. For AOT, provide CompletionRequest.JsonSchema directly.")]
     public static JsonElement Generate(Type type)
     {
-        using var stream = new MemoryStream();
-        using var writer = new Utf8JsonWriter(stream);
-        WriteSchema(writer, type);
-        writer.Flush();
-        stream.Position = 0;
-        using var doc = JsonDocument.Parse(stream);
+        var json = GenerateAsString(type);
+        using var doc = JsonDocument.Parse(json);
         return doc.RootElement.Clone();
     }
 
+    [RequiresUnreferencedCode("JSON schema generation uses reflection. For AOT, provide CompletionRequest.JsonSchema directly.")]
+    [RequiresDynamicCode("JSON schema generation uses reflection. For AOT, provide CompletionRequest.JsonSchema directly.")]
+    public static string GenerateAsString(Type type)
+    {
+        return _cache.GetOrAdd(type, static t =>
+        {
+            using var stream = new MemoryStream();
+            using var writer = new Utf8JsonWriter(stream);
+            WriteSchema(writer, t);
+            writer.Flush();
+            return Encoding.UTF8.GetString(stream.ToArray());
+        });
+    }
+
+    [UnconditionalSuppressMessage("Trimming", "IL2070", Justification = "Callers are annotated with RequiresUnreferencedCode.")]
     private static void WriteSchema(Utf8JsonWriter writer, Type type)
     {
         type = Nullable.GetUnderlyingType(type) ?? type;
@@ -146,6 +166,7 @@ internal static class JsonSchemaGenerator
         writer.WriteEndObject();
     }
 
+    [UnconditionalSuppressMessage("Trimming", "IL2070", Justification = "Callers are annotated with RequiresUnreferencedCode.")]
     private static Type? GetEnumerableElementType(Type type)
     {
         if (type.IsArray)

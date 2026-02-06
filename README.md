@@ -244,6 +244,28 @@ var response = await client.CompleteAsync(new CompletionRequest
 Console.WriteLine($"Cache read: {response.Usage.CacheReadTokens}, Cache write: {response.Usage.CacheWriteTokens}");
 ```
 
+## AOT / Trimming
+
+The library is AOT and trimming compatible (`IsAotCompatible`, `IsTrimmable`).
+
+For structured output and tool calling with AOT, use the `JsonTypeInfo<T>` overloads and provide your schema explicitly:
+
+```csharp
+[JsonSerializable(typeof(WeatherInfo))]
+internal partial class MyJsonContext : JsonSerializerContext { }
+
+var response = await client.CompleteAsync(
+    new CompletionRequest
+    {
+        Model = AiModel.Gemini25Pro,
+        JsonSchema = """{"type":"object","properties":{"city":{"type":"string"},"temp":{"type":"number"}},"required":["city","temp"]}""",
+        Messages = [new ChatMessage { Role = ChatRole.User, Content = "Weather in Berlin?" }]
+    },
+    MyJsonContext.Default.WeatherInfo);
+```
+
+The non-generic methods (`CompleteAsync`, `StreamAsync`, `EmbedAsync`, etc.) are always AOT-safe.
+
 ## License
 
 [MIT](LICENSE)

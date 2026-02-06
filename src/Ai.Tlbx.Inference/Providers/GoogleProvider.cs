@@ -1,16 +1,14 @@
+using System.Buffers;
+using System.Net.Http.Headers;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 
 namespace Ai.Tlbx.Inference.Providers;
 
 internal sealed class GoogleProvider : IProvider
 {
-    private static readonly JsonSerializerOptions _jsonOptions = new()
-    {
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-    };
-
     private readonly ProviderRequestContext _context;
     private readonly GoogleTokenProvider? _tokenProvider;
     private readonly string? _projectId;
@@ -33,25 +31,25 @@ internal sealed class GoogleProvider : IProvider
     public async Task<ProviderResponse> CompleteAsync(ProviderRequest request, CancellationToken ct)
     {
         var body = BuildRequestBody(request);
-        var json = JsonSerializer.Serialize(body, _jsonOptions);
+        var jsonBytes = SerializeToUtf8Bytes(body);
         var url = BuildUrl(request.ModelApiName, "generateContent");
 
         _context.Log?.Invoke(InferenceLogLevel.Debug, $"Request to {url}");
 
-        using var httpRequest = await CreateHttpRequestAsync(json, url, ct).ConfigureAwait(false);
+        using var httpRequest = await CreateHttpRequestAsync(jsonBytes, url, ct).ConfigureAwait(false);
         using var response = await _context.HttpClient.SendAsync(httpRequest, ct).ConfigureAwait(false);
-
-        var responseBody = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
 
         if (!response.IsSuccessStatusCode)
         {
+            var errorBody = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
             throw new HttpRequestException(
-                $"Google API request failed with status {response.StatusCode}: {responseBody}",
+                $"Google API request failed with status {response.StatusCode}: {errorBody}",
                 null,
                 response.StatusCode);
         }
 
-        using var doc = JsonDocument.Parse(responseBody);
+        using var responseStream = await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
+        using var doc = await JsonDocument.ParseAsync(responseStream, cancellationToken: ct).ConfigureAwait(false);
         var root = doc.RootElement;
 
         var contentBuilder = new StringBuilder();
@@ -104,13 +102,13 @@ internal sealed class GoogleProvider : IProvider
         [EnumeratorCancellation] CancellationToken ct)
     {
         var body = BuildRequestBody(request);
-        var json = JsonSerializer.Serialize(body, _jsonOptions);
+        var jsonBytes = SerializeToUtf8Bytes(body);
 
         var url = BuildStreamUrl(request.ModelApiName);
 
         _context.Log?.Invoke(InferenceLogLevel.Debug, $"Stream request to {url}");
 
-        using var httpRequest = await CreateHttpRequestAsync(json, url, ct).ConfigureAwait(false);
+        using var httpRequest = await CreateHttpRequestAsync(jsonBytes, url, ct).ConfigureAwait(false);
         using var response = await _context.HttpClient.SendAsync(
             httpRequest,
             HttpCompletionOption.ResponseHeadersRead,
@@ -181,10 +179,13 @@ internal sealed class GoogleProvider : IProvider
 
     public async Task<ProviderEmbeddingResponse> EmbedAsync(ProviderEmbeddingRequest request, CancellationToken ct)
     {
-        var body = new Dictionary<string, object?>
+        var body = new JsonObject
         {
             ["model"] = $"models/{request.ModelApiName}",
-            ["content"] = new { parts = new[] { new { text = request.Input } } },
+            ["content"] = new JsonObject
+            {
+                ["parts"] = new JsonArray { (JsonNode)new JsonObject { ["text"] = request.Input } },
+            },
         };
 
         if (request.Dimensions.HasValue)
@@ -192,23 +193,23 @@ internal sealed class GoogleProvider : IProvider
             body["outputDimensionality"] = request.Dimensions.Value;
         }
 
-        var json = JsonSerializer.Serialize(body, _jsonOptions);
+        var jsonBytes = SerializeToUtf8Bytes(body);
         var url = BuildUrl(request.ModelApiName, "embedContent");
 
-        using var httpRequest = await CreateHttpRequestAsync(json, url, ct).ConfigureAwait(false);
+        using var httpRequest = await CreateHttpRequestAsync(jsonBytes, url, ct).ConfigureAwait(false);
         using var response = await _context.HttpClient.SendAsync(httpRequest, ct).ConfigureAwait(false);
-
-        var responseBody = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
 
         if (!response.IsSuccessStatusCode)
         {
+            var errorBody = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
             throw new HttpRequestException(
-                $"Google embedding request failed with status {response.StatusCode}: {responseBody}",
+                $"Google embedding request failed with status {response.StatusCode}: {errorBody}",
                 null,
                 response.StatusCode);
         }
 
-        using var doc = JsonDocument.Parse(responseBody);
+        using var responseStream = await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
+        using var doc = await JsonDocument.ParseAsync(responseStream, cancellationToken: ct).ConfigureAwait(false);
         var embedding = ParseEmbeddingValues(doc.RootElement.GetProperty("embedding").GetProperty("values"));
 
         return new ProviderEmbeddingResponse
@@ -222,12 +223,16 @@ internal sealed class GoogleProvider : IProvider
         ProviderBatchEmbeddingRequest request,
         CancellationToken ct)
     {
-        var requests = request.Inputs.Select(input =>
+        var requestsArray = new JsonArray();
+        foreach (var input in request.Inputs)
         {
-            var req = new Dictionary<string, object?>
+            var req = new JsonObject
             {
                 ["model"] = $"models/{request.ModelApiName}",
-                ["content"] = new { parts = new[] { new { text = input } } },
+                ["content"] = new JsonObject
+                {
+                    ["parts"] = new JsonArray { (JsonNode)new JsonObject { ["text"] = input } },
+                },
             };
 
             if (request.Dimensions.HasValue)
@@ -235,27 +240,27 @@ internal sealed class GoogleProvider : IProvider
                 req["outputDimensionality"] = request.Dimensions.Value;
             }
 
-            return req;
-        }).ToList();
+            requestsArray.Add((JsonNode)req);
+        }
 
-        var body = new { requests };
-        var json = JsonSerializer.Serialize(body, _jsonOptions);
+        var body = new JsonObject { ["requests"] = requestsArray };
+        var jsonBytes = SerializeToUtf8Bytes(body);
         var url = BuildUrl(request.ModelApiName, "batchEmbedContents");
 
-        using var httpRequest = await CreateHttpRequestAsync(json, url, ct).ConfigureAwait(false);
+        using var httpRequest = await CreateHttpRequestAsync(jsonBytes, url, ct).ConfigureAwait(false);
         using var response = await _context.HttpClient.SendAsync(httpRequest, ct).ConfigureAwait(false);
-
-        var responseBody = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
 
         if (!response.IsSuccessStatusCode)
         {
+            var errorBody = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
             throw new HttpRequestException(
-                $"Google batch embedding request failed with status {response.StatusCode}: {responseBody}",
+                $"Google batch embedding request failed with status {response.StatusCode}: {errorBody}",
                 null,
                 response.StatusCode);
         }
 
-        using var doc = JsonDocument.Parse(responseBody);
+        using var responseStream = await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
+        using var doc = await JsonDocument.ParseAsync(responseStream, cancellationToken: ct).ConfigureAwait(false);
         var embeddingsArray = doc.RootElement.GetProperty("embeddings");
         var embeddings = new List<ReadOnlyMemory<float>>(embeddingsArray.GetArrayLength());
 
@@ -273,32 +278,35 @@ internal sealed class GoogleProvider : IProvider
 
     public async Task<byte[]> GenerateImageAsync(ProviderImageRequest request, CancellationToken ct)
     {
-        var body = new
+        var body = new JsonObject
         {
-            contents = new[]
+            ["contents"] = new JsonArray
             {
-                new { parts = new[] { new { text = request.Prompt } } },
+                (JsonNode)new JsonObject
+                {
+                    ["parts"] = new JsonArray { (JsonNode)new JsonObject { ["text"] = request.Prompt } },
+                },
             },
-            generationConfig = new { responseMimeType = "image/png" },
+            ["generationConfig"] = new JsonObject { ["responseMimeType"] = "image/png" },
         };
 
-        var json = JsonSerializer.Serialize(body, _jsonOptions);
+        var jsonBytes = SerializeToUtf8Bytes(body);
         var url = BuildUrl("gemini-3-pro-image-preview", "generateContent");
 
-        using var httpRequest = await CreateHttpRequestAsync(json, url, ct).ConfigureAwait(false);
+        using var httpRequest = await CreateHttpRequestAsync(jsonBytes, url, ct).ConfigureAwait(false);
         using var response = await _context.HttpClient.SendAsync(httpRequest, ct).ConfigureAwait(false);
-
-        var responseBody = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
 
         if (!response.IsSuccessStatusCode)
         {
+            var errorBody = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
             throw new HttpRequestException(
-                $"Google image generation failed with status {response.StatusCode}: {responseBody}",
+                $"Google image generation failed with status {response.StatusCode}: {errorBody}",
                 null,
                 response.StatusCode);
         }
 
-        using var doc = JsonDocument.Parse(responseBody);
+        using var responseStream = await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
+        using var doc = await JsonDocument.ParseAsync(responseStream, cancellationToken: ct).ConfigureAwait(false);
         var inlineData = doc.RootElement
             .GetProperty("candidates")[0]
             .GetProperty("content")
@@ -310,19 +318,19 @@ internal sealed class GoogleProvider : IProvider
         return Convert.FromBase64String(inlineData);
     }
 
-    private Dictionary<string, object?> BuildRequestBody(ProviderRequest request)
+    private JsonObject BuildRequestBody(ProviderRequest request)
     {
-        var body = new Dictionary<string, object?>();
+        var body = new JsonObject();
 
         if (request.SystemMessage is not null)
         {
-            body["system_instruction"] = new
+            body["system_instruction"] = new JsonObject
             {
-                parts = new[] { new { text = request.SystemMessage } },
+                ["parts"] = new JsonArray { (JsonNode)new JsonObject { ["text"] = request.SystemMessage } },
             };
         }
 
-        var contents = new List<object>();
+        var contents = new JsonArray();
 
         foreach (var msg in request.Messages)
         {
@@ -330,91 +338,91 @@ internal sealed class GoogleProvider : IProvider
             {
                 case ChatRole.User when msg.Attachments is { Count: > 0 }:
                 {
-                    var parts = new List<object>();
+                    var parts = new JsonArray();
 
                     foreach (var attachment in msg.Attachments)
                     {
-                        var base64 = Convert.ToBase64String(attachment.Content.ToArray());
-                        parts.Add(new
+                        var base64 = Convert.ToBase64String(attachment.Content.Span);
+                        parts.Add((JsonNode)new JsonObject
                         {
-                            inline_data = new
+                            ["inline_data"] = new JsonObject
                             {
-                                mime_type = attachment.MimeType,
-                                data = base64,
+                                ["mime_type"] = attachment.MimeType,
+                                ["data"] = base64,
                             },
                         });
                     }
 
                     if (!string.IsNullOrEmpty(msg.Content))
                     {
-                        parts.Add(new { text = msg.Content });
+                        parts.Add((JsonNode)new JsonObject { ["text"] = msg.Content });
                     }
 
-                    contents.Add(new { role = "user", parts });
+                    contents.Add((JsonNode)new JsonObject { ["role"] = "user", ["parts"] = parts });
                     break;
                 }
 
                 case ChatRole.User:
-                    contents.Add(new
+                    contents.Add((JsonNode)new JsonObject
                     {
-                        role = "user",
-                        parts = new[] { new { text = msg.Content ?? "" } },
+                        ["role"] = "user",
+                        ["parts"] = new JsonArray { (JsonNode)new JsonObject { ["text"] = msg.Content ?? "" } },
                     });
                     break;
 
                 case ChatRole.Assistant when msg.ToolCalls is { Count: > 0 }:
                 {
-                    var parts = new List<object>();
+                    var parts = new JsonArray();
                     if (!string.IsNullOrEmpty(msg.Content))
                     {
-                        parts.Add(new { text = msg.Content });
+                        parts.Add((JsonNode)new JsonObject { ["text"] = msg.Content });
                     }
                     foreach (var tc in msg.ToolCalls)
                     {
-                        parts.Add(new
+                        parts.Add((JsonNode)new JsonObject
                         {
-                            functionCall = new
+                            ["functionCall"] = new JsonObject
                             {
-                                name = tc.Name,
-                                args = JsonSerializer.Deserialize<JsonElement>(tc.Arguments),
+                                ["name"] = tc.Name,
+                                ["args"] = JsonNode.Parse(tc.Arguments),
                             },
                         });
                     }
-                    contents.Add(new { role = "model", parts });
+                    contents.Add((JsonNode)new JsonObject { ["role"] = "model", ["parts"] = parts });
                     break;
                 }
 
                 case ChatRole.Assistant:
-                    contents.Add(new
+                    contents.Add((JsonNode)new JsonObject
                     {
-                        role = "model",
-                        parts = new[] { new { text = msg.Content ?? "" } },
+                        ["role"] = "model",
+                        ["parts"] = new JsonArray { (JsonNode)new JsonObject { ["text"] = msg.Content ?? "" } },
                     });
                     break;
 
                 case ChatRole.Tool:
                 {
-                    object resultValue;
+                    JsonNode resultValue;
                     try
                     {
-                        resultValue = JsonSerializer.Deserialize<JsonElement>(msg.Content ?? "{}");
+                        resultValue = JsonNode.Parse(msg.Content ?? "{}") ?? JsonValue.Create(msg.Content ?? "");
                     }
                     catch (JsonException)
                     {
-                        resultValue = msg.Content ?? "";
+                        resultValue = JsonValue.Create(msg.Content ?? "");
                     }
 
-                    contents.Add(new
+                    contents.Add((JsonNode)new JsonObject
                     {
-                        role = "user",
-                        parts = new[]
+                        ["role"] = "user",
+                        ["parts"] = new JsonArray
                         {
-                            new
+                            (JsonNode)new JsonObject
                             {
-                                functionResponse = new
+                                ["functionResponse"] = new JsonObject
                                 {
-                                    name = msg.ToolCallId ?? "",
-                                    response = new { result = resultValue },
+                                    ["name"] = msg.ToolCallId ?? "",
+                                    ["response"] = new JsonObject { ["result"] = resultValue },
                                 },
                             },
                         },
@@ -426,7 +434,7 @@ internal sealed class GoogleProvider : IProvider
 
         body["contents"] = contents;
 
-        var generationConfig = new Dictionary<string, object?>();
+        var generationConfig = new JsonObject();
 
         if (request.Temperature.HasValue)
         {
@@ -445,22 +453,26 @@ internal sealed class GoogleProvider : IProvider
 
         if (request.StopSequences is { Count: > 0 })
         {
-            generationConfig["stopSequences"] = request.StopSequences;
+            var stopArray = new JsonArray();
+            foreach (var seq in request.StopSequences)
+            {
+                stopArray.Add((JsonNode)JsonValue.Create(seq)!);
+            }
+            generationConfig["stopSequences"] = stopArray;
         }
 
         if (request.ThinkingBudget.HasValue)
         {
-            generationConfig["thinkingConfig"] = new
+            generationConfig["thinkingConfig"] = new JsonObject
             {
-                thinkingBudget = request.ThinkingBudget.Value,
+                ["thinkingBudget"] = request.ThinkingBudget.Value,
             };
         }
 
         if (request.JsonSchema is not null)
         {
-            using var schemaDoc = JsonDocument.Parse(request.JsonSchema);
             generationConfig["responseMimeType"] = "application/json";
-            generationConfig["responseSchema"] = schemaDoc.RootElement.Clone();
+            generationConfig["responseSchema"] = JsonNode.Parse(request.JsonSchema);
         }
 
         if (generationConfig.Count > 0)
@@ -470,18 +482,17 @@ internal sealed class GoogleProvider : IProvider
 
         if (request.Tools is { Count: > 0 })
         {
-            body["tools"] = new[]
+            var declarations = new JsonArray();
+            foreach (var t in request.Tools)
             {
-                new
+                declarations.Add((JsonNode)new JsonObject
                 {
-                    function_declarations = request.Tools.Select(t => new
-                    {
-                        name = t.Name,
-                        description = t.Description,
-                        parameters = t.ParametersSchema,
-                    }).ToList(),
-                },
-            };
+                    ["name"] = t.Name,
+                    ["description"] = t.Description,
+                    ["parameters"] = JsonNode.Parse(t.ParametersSchema.GetRawText()),
+                });
+            }
+            body["tools"] = new JsonArray { (JsonNode)new JsonObject { ["function_declarations"] = declarations } };
         }
 
         return body;
@@ -507,20 +518,35 @@ internal sealed class GoogleProvider : IProvider
         return $"https://generativelanguage.googleapis.com/v1beta/models/{model}:streamGenerateContent?alt=sse&key={_context.ApiKey}";
     }
 
-    private async Task<HttpRequestMessage> CreateHttpRequestAsync(string json, string url, CancellationToken ct)
+    private async Task<HttpRequestMessage> CreateHttpRequestAsync(
+        ReadOnlyMemory<byte> jsonBytes,
+        string url,
+        CancellationToken ct)
     {
+        var content = new ReadOnlyMemoryContent(jsonBytes);
+        content.Headers.ContentType = new MediaTypeHeaderValue("application/json") { CharSet = "utf-8" };
+
         var httpRequest = new HttpRequestMessage(HttpMethod.Post, url)
         {
-            Content = new StringContent(json, Encoding.UTF8, "application/json"),
+            Content = content,
         };
 
         if (IsVertex)
         {
             var token = await _tokenProvider!.GetAccessTokenAsync(ct).ConfigureAwait(false);
-            httpRequest.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
+            httpRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
         }
 
         return httpRequest;
+    }
+
+    private static ReadOnlyMemory<byte> SerializeToUtf8Bytes(JsonObject body)
+    {
+        var buffer = new ArrayBufferWriter<byte>();
+        using var writer = new Utf8JsonWriter(buffer);
+        body.WriteTo(writer);
+        writer.Flush();
+        return buffer.WrittenMemory;
     }
 
     private static TokenUsage ParseUsage(JsonElement root)

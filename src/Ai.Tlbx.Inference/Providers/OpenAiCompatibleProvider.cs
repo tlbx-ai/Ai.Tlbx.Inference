@@ -1,16 +1,14 @@
+using System.Buffers;
+using System.Net.Http.Headers;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 
 namespace Ai.Tlbx.Inference.Providers;
 
 internal abstract class OpenAiCompatibleProvider : IProvider
 {
-    private static readonly JsonSerializerOptions _jsonOptions = new()
-    {
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-    };
-
     private readonly ProviderRequestContext _context;
 
     protected OpenAiCompatibleProvider(ProviderRequestContext context)
@@ -23,24 +21,24 @@ internal abstract class OpenAiCompatibleProvider : IProvider
     public async Task<ProviderResponse> CompleteAsync(ProviderRequest request, CancellationToken ct)
     {
         var body = BuildRequestBody(request, stream: false);
-        var json = JsonSerializer.Serialize(body, _jsonOptions);
+        var jsonBytes = SerializeToUtf8Bytes(body);
 
         _context.Log?.Invoke(InferenceLogLevel.Debug, $"Request to {_context.BaseUrl}/v1/chat/completions");
 
-        using var httpRequest = CreateHttpRequest(json, "/v1/chat/completions");
+        using var httpRequest = CreateHttpRequest(jsonBytes, "/v1/chat/completions");
         using var response = await _context.HttpClient.SendAsync(httpRequest, ct).ConfigureAwait(false);
-
-        var responseBody = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
 
         if (!response.IsSuccessStatusCode)
         {
+            var errorBody = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
             throw new HttpRequestException(
-                $"API request failed with status {response.StatusCode}: {responseBody}",
+                $"API request failed with status {response.StatusCode}: {errorBody}",
                 null,
                 response.StatusCode);
         }
 
-        using var doc = JsonDocument.Parse(responseBody);
+        using var responseStream = await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
+        using var doc = await JsonDocument.ParseAsync(responseStream, cancellationToken: ct).ConfigureAwait(false);
         var root = doc.RootElement;
 
         var choice = root.GetProperty("choices")[0];
@@ -86,11 +84,11 @@ internal abstract class OpenAiCompatibleProvider : IProvider
         [EnumeratorCancellation] CancellationToken ct)
     {
         var body = BuildRequestBody(request, stream: true);
-        var json = JsonSerializer.Serialize(body, _jsonOptions);
+        var jsonBytes = SerializeToUtf8Bytes(body);
 
         _context.Log?.Invoke(InferenceLogLevel.Debug, $"Stream request to {_context.BaseUrl}/v1/chat/completions");
 
-        using var httpRequest = CreateHttpRequest(json, "/v1/chat/completions");
+        using var httpRequest = CreateHttpRequest(jsonBytes, "/v1/chat/completions");
         using var response = await _context.HttpClient.SendAsync(
             httpRequest,
             HttpCompletionOption.ResponseHeadersRead,
@@ -199,22 +197,22 @@ internal abstract class OpenAiCompatibleProvider : IProvider
         CancellationToken ct)
     {
         var body = BuildEmbeddingBody(request.ModelApiName, request.Input, request.Dimensions);
-        var json = JsonSerializer.Serialize(body, _jsonOptions);
+        var jsonBytes = SerializeToUtf8Bytes(body);
 
-        using var httpRequest = CreateHttpRequest(json, "/v1/embeddings");
+        using var httpRequest = CreateHttpRequest(jsonBytes, "/v1/embeddings");
         using var response = await _context.HttpClient.SendAsync(httpRequest, ct).ConfigureAwait(false);
-
-        var responseBody = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
 
         if (!response.IsSuccessStatusCode)
         {
+            var errorBody = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
             throw new HttpRequestException(
-                $"Embedding request failed with status {response.StatusCode}: {responseBody}",
+                $"Embedding request failed with status {response.StatusCode}: {errorBody}",
                 null,
                 response.StatusCode);
         }
 
-        using var doc = JsonDocument.Parse(responseBody);
+        using var responseStream = await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
+        using var doc = await JsonDocument.ParseAsync(responseStream, cancellationToken: ct).ConfigureAwait(false);
         var root = doc.RootElement;
 
         var embedding = ParseEmbeddingArray(root.GetProperty("data")[0].GetProperty("embedding"));
@@ -232,22 +230,22 @@ internal abstract class OpenAiCompatibleProvider : IProvider
         CancellationToken ct)
     {
         var body = BuildBatchEmbeddingBody(request.ModelApiName, request.Inputs, request.Dimensions);
-        var json = JsonSerializer.Serialize(body, _jsonOptions);
+        var jsonBytes = SerializeToUtf8Bytes(body);
 
-        using var httpRequest = CreateHttpRequest(json, "/v1/embeddings");
+        using var httpRequest = CreateHttpRequest(jsonBytes, "/v1/embeddings");
         using var response = await _context.HttpClient.SendAsync(httpRequest, ct).ConfigureAwait(false);
-
-        var responseBody = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
 
         if (!response.IsSuccessStatusCode)
         {
+            var errorBody = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
             throw new HttpRequestException(
-                $"Batch embedding request failed with status {response.StatusCode}: {responseBody}",
+                $"Batch embedding request failed with status {response.StatusCode}: {errorBody}",
                 null,
                 response.StatusCode);
         }
 
-        using var doc = JsonDocument.Parse(responseBody);
+        using var responseStream = await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
+        using var doc = await JsonDocument.ParseAsync(responseStream, cancellationToken: ct).ConfigureAwait(false);
         var root = doc.RootElement;
 
         var dataArray = root.GetProperty("data");
@@ -270,13 +268,13 @@ internal abstract class OpenAiCompatibleProvider : IProvider
     public virtual Task<byte[]> GenerateImageAsync(ProviderImageRequest request, CancellationToken ct)
         => throw new NotSupportedException("Image generation is not supported by this provider.");
 
-    private Dictionary<string, object?> BuildRequestBody(ProviderRequest request, bool stream)
+    private JsonObject BuildRequestBody(ProviderRequest request, bool stream)
     {
-        var messages = new List<object>();
+        var messages = new JsonArray();
 
         if (request.SystemMessage is not null)
         {
-            messages.Add(new { role = "system", content = request.SystemMessage });
+            messages.Add((JsonNode)new JsonObject { ["role"] = "system", ["content"] = request.SystemMessage });
         }
 
         foreach (var msg in request.Messages)
@@ -284,34 +282,38 @@ internal abstract class OpenAiCompatibleProvider : IProvider
             switch (msg.Role)
             {
                 case ChatRole.System:
-                    messages.Add(new { role = "system", content = msg.Content ?? "" });
+                    messages.Add((JsonNode)new JsonObject { ["role"] = "system", ["content"] = msg.Content ?? "" });
                     break;
 
                 case ChatRole.User:
-                    messages.Add(new { role = "user", content = msg.Content ?? "" });
+                    messages.Add((JsonNode)new JsonObject { ["role"] = "user", ["content"] = msg.Content ?? "" });
                     break;
 
                 case ChatRole.Assistant when msg.ToolCalls is { Count: > 0 }:
-                    var toolCalls = msg.ToolCalls.Select(tc => new
+                    var toolCallsArray = new JsonArray();
+                    foreach (var tc in msg.ToolCalls)
                     {
-                        id = tc.Id,
-                        type = "function",
-                        function = new { name = tc.Name, arguments = tc.Arguments },
-                    }).ToList();
-                    messages.Add(new { role = "assistant", content = msg.Content, tool_calls = toolCalls });
+                        toolCallsArray.Add((JsonNode)new JsonObject
+                        {
+                            ["id"] = tc.Id,
+                            ["type"] = "function",
+                            ["function"] = new JsonObject { ["name"] = tc.Name, ["arguments"] = tc.Arguments },
+                        });
+                    }
+                    messages.Add((JsonNode)new JsonObject { ["role"] = "assistant", ["content"] = msg.Content, ["tool_calls"] = toolCallsArray });
                     break;
 
                 case ChatRole.Assistant:
-                    messages.Add(new { role = "assistant", content = msg.Content ?? "" });
+                    messages.Add((JsonNode)new JsonObject { ["role"] = "assistant", ["content"] = msg.Content ?? "" });
                     break;
 
                 case ChatRole.Tool:
-                    messages.Add(new { role = "tool", content = msg.Content ?? "", tool_call_id = msg.ToolCallId });
+                    messages.Add((JsonNode)new JsonObject { ["role"] = "tool", ["content"] = msg.Content ?? "", ["tool_call_id"] = msg.ToolCallId });
                     break;
             }
         }
 
-        var body = new Dictionary<string, object?>
+        var body = new JsonObject
         {
             ["model"] = request.ModelApiName,
             ["messages"] = messages,
@@ -334,7 +336,12 @@ internal abstract class OpenAiCompatibleProvider : IProvider
 
         if (request.StopSequences is { Count: > 0 })
         {
-            body["stop"] = request.StopSequences;
+            var stopArray = new JsonArray();
+            foreach (var s in request.StopSequences)
+            {
+                stopArray.Add((JsonNode)JsonValue.Create(s)!);
+            }
+            body["stop"] = stopArray;
         }
 
         if (request.ThinkingBudget.HasValue)
@@ -344,29 +351,33 @@ internal abstract class OpenAiCompatibleProvider : IProvider
 
         if (request.Tools is { Count: > 0 })
         {
-            body["tools"] = request.Tools.Select(t => new
+            var toolsArray = new JsonArray();
+            foreach (var t in request.Tools)
             {
-                type = "function",
-                function = new
+                toolsArray.Add((JsonNode)new JsonObject
                 {
-                    name = t.Name,
-                    description = t.Description,
-                    parameters = t.ParametersSchema,
-                },
-            }).ToList();
+                    ["type"] = "function",
+                    ["function"] = new JsonObject
+                    {
+                        ["name"] = t.Name,
+                        ["description"] = t.Description,
+                        ["parameters"] = JsonNode.Parse(t.ParametersSchema.GetRawText()),
+                    },
+                });
+            }
+            body["tools"] = toolsArray;
         }
 
         if (request.JsonSchema is not null)
         {
-            using var schemaDoc = JsonDocument.Parse(request.JsonSchema);
-            body["response_format"] = new
+            body["response_format"] = new JsonObject
             {
-                type = "json_schema",
-                json_schema = new
+                ["type"] = "json_schema",
+                ["json_schema"] = new JsonObject
                 {
-                    name = "response",
-                    strict = true,
-                    schema = schemaDoc.RootElement.Clone(),
+                    ["name"] = "response",
+                    ["strict"] = true,
+                    ["schema"] = JsonNode.Parse(request.JsonSchema),
                 },
             };
         }
@@ -374,20 +385,29 @@ internal abstract class OpenAiCompatibleProvider : IProvider
         if (stream)
         {
             body["stream"] = true;
-            body["stream_options"] = new { include_usage = true };
+            body["stream_options"] = new JsonObject { ["include_usage"] = true };
         }
 
         return body;
     }
 
-    private HttpRequestMessage CreateHttpRequest(string json, string path)
+    private static ReadOnlyMemory<byte> SerializeToUtf8Bytes(JsonObject body)
+    {
+        var buffer = new ArrayBufferWriter<byte>();
+        using var writer = new Utf8JsonWriter(buffer);
+        body.WriteTo(writer);
+        writer.Flush();
+        return buffer.WrittenMemory;
+    }
+
+    private HttpRequestMessage CreateHttpRequest(ReadOnlyMemory<byte> jsonBytes, string path)
     {
         var httpRequest = new HttpRequestMessage(HttpMethod.Post, $"{_context.BaseUrl}{path}")
         {
-            Content = new StringContent(json, Encoding.UTF8, "application/json"),
+            Content = new ReadOnlyMemoryContent(jsonBytes),
         };
-
-        httpRequest.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", _context.ApiKey);
+        httpRequest.Content.Headers.ContentType = new MediaTypeHeaderValue("application/json") { CharSet = "utf-8" };
+        httpRequest.Headers.TryAddWithoutValidation("Authorization", $"Bearer {_context.ApiKey}");
         return httpRequest;
     }
 
@@ -430,21 +450,41 @@ internal abstract class OpenAiCompatibleProvider : IProvider
         return arr;
     }
 
-    private static object BuildEmbeddingBody(string model, string input, int? dimensions)
+    private static JsonObject BuildEmbeddingBody(string model, string input, int? dimensions)
     {
+        var body = new JsonObject
+        {
+            ["model"] = model,
+            ["input"] = input,
+        };
+
         if (dimensions.HasValue)
         {
-            return new { model, input, dimensions = dimensions.Value };
+            body["dimensions"] = dimensions.Value;
         }
-        return new { model, input };
+
+        return body;
     }
 
-    private static object BuildBatchEmbeddingBody(string model, IReadOnlyList<string> inputs, int? dimensions)
+    private static JsonObject BuildBatchEmbeddingBody(string model, IReadOnlyList<string> inputs, int? dimensions)
     {
+        var inputArray = new JsonArray();
+        foreach (var input in inputs)
+        {
+            inputArray.Add((JsonNode)JsonValue.Create(input)!);
+        }
+
+        var body = new JsonObject
+        {
+            ["model"] = model,
+            ["input"] = inputArray,
+        };
+
         if (dimensions.HasValue)
         {
-            return new { model, input = inputs, dimensions = dimensions.Value };
+            body["dimensions"] = dimensions.Value;
         }
-        return new { model, input = inputs };
+
+        return body;
     }
 }

@@ -10,6 +10,16 @@
 - All DTOs are sealed records
 - Single shared `HttpClient`, providers use absolute URIs per request
 
+## AOT / Trimming
+- Library is marked `IsAotCompatible` and `IsTrimmable` — all internal code must be AOT-safe
+- **Provider request bodies**: use `System.Text.Json.Nodes.JsonObject`/`JsonArray` — never anonymous types or `Dictionary<string, object?>`
+- **Response parsing**: use `JsonDocument.Parse` + manual property access (already AOT-safe)
+- **Never** use `JsonSerializer.Serialize/Deserialize` with reflection in internal code
+- Any method that requires reflection must be annotated with `[RequiresDynamicCode]` / `[RequiresUnreferencedCode]`
+- Generic methods (`CompleteAsync<T>`, `CompleteWithToolsAsync<T>`) have AOT-safe overloads accepting `JsonTypeInfo<T>`
+- `JsonSchemaGenerator` uses reflection — AOT consumers provide `CompletionRequest.JsonSchema` directly
+- AOT testbed: `dotnet publish tests\Ai.Tlbx.Inference.AotTestbed\Ai.Tlbx.Inference.AotTestbed.csproj -c Release -r win-x64`
+
 ## Build
 - Target: net9.0
 - Must build with 0 errors, 0 warnings (`TreatWarningsAsErrors` is enabled)
