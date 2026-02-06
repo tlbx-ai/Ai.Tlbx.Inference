@@ -11,16 +11,10 @@ internal static class SseStreamParser
     {
         using var reader = new StreamReader(stream, Encoding.UTF8);
 
-        while (!reader.EndOfStream)
+        string? line;
+        while ((line = await reader.ReadLineAsync(ct).ConfigureAwait(false)) is not null)
         {
             ct.ThrowIfCancellationRequested();
-
-            var line = await reader.ReadLineAsync(ct).ConfigureAwait(false);
-
-            if (line is null)
-            {
-                break;
-            }
 
             if (!line.StartsWith("data: ", StringComparison.Ordinal))
             {

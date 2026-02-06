@@ -113,16 +113,10 @@ internal sealed class AnthropicProvider : IProvider
         var toolArgsBuilder = new StringBuilder();
         var accumulatedUsage = new TokenUsage();
 
-        while (!reader.EndOfStream)
+        string? line;
+        while ((line = await reader.ReadLineAsync(ct).ConfigureAwait(false)) is not null)
         {
             ct.ThrowIfCancellationRequested();
-
-            var line = await reader.ReadLineAsync(ct).ConfigureAwait(false);
-
-            if (line is null)
-            {
-                break;
-            }
 
             if (line.StartsWith("event: ", StringComparison.Ordinal))
             {
