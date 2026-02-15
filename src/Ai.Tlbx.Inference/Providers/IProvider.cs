@@ -22,6 +22,8 @@ internal sealed record ProviderRequest
     public double? TopP { get; init; }
     public IReadOnlyList<string>? StopSequences { get; init; }
     public IReadOnlyList<ToolDefinition>? Tools { get; init; }
+    public bool EnableWebSearch { get; init; }
+    public bool EnableXSearch { get; init; }
 }
 
 internal sealed record ProviderResponse

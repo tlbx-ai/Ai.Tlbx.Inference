@@ -349,22 +349,36 @@ internal abstract class OpenAiCompatibleProvider : IProvider
             body["reasoning_effort"] = MapReasoningEffort(request.ThinkingBudget.Value);
         }
 
-        if (request.Tools is { Count: > 0 })
+        var hasTools = request.Tools is { Count: > 0 };
+        var hasSearch = request.EnableWebSearch || request.EnableXSearch;
+
+        if (hasTools || hasSearch)
         {
             var toolsArray = new JsonArray();
-            foreach (var t in request.Tools)
+
+            if (request.Tools is { Count: > 0 })
             {
-                toolsArray.Add((JsonNode)new JsonObject
+                foreach (var t in request.Tools)
                 {
-                    ["type"] = "function",
-                    ["function"] = new JsonObject
+                    toolsArray.Add((JsonNode)new JsonObject
                     {
-                        ["name"] = t.Name,
-                        ["description"] = t.Description,
-                        ["parameters"] = JsonNode.Parse(t.ParametersSchema.GetRawText()),
-                    },
-                });
+                        ["type"] = "function",
+                        ["function"] = new JsonObject
+                        {
+                            ["name"] = t.Name,
+                            ["description"] = t.Description,
+                            ["parameters"] = JsonNode.Parse(t.ParametersSchema.GetRawText()),
+                        },
+                    });
+                }
             }
+
+            if (request.EnableWebSearch)
+                toolsArray.Add((JsonNode)new JsonObject { ["type"] = "web_search" });
+
+            if (request.EnableXSearch)
+                toolsArray.Add((JsonNode)new JsonObject { ["type"] = "x_search" });
+
             body["tools"] = toolsArray;
         }
 

@@ -12,4 +12,6 @@ public sealed record CompletionRequest
     public string? JsonSchema { get; init; }
     public double? TopP { get; init; }
     public IReadOnlyList<string>? StopSequences { get; init; }
+    public bool EnableWebSearch { get; init; }
+    public bool EnableXSearch { get; init; }
 }

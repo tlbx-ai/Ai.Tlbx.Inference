@@ -391,6 +391,8 @@ public sealed class AiInferenceClient : IAiInferenceClient
             TopP = request.TopP,
             StopSequences = request.StopSequences,
             Tools = tools,
+            EnableWebSearch = request.EnableWebSearch,
+            EnableXSearch = request.EnableXSearch,
         };
     }
 
