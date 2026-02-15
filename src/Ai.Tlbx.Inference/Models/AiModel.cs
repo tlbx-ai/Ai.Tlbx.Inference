@@ -26,6 +26,7 @@ public enum AiModel
 
     // xAI
     Grok41Fast,
+    Grok41FastNonReasoning,
     Grok4,
     Grok3
 }
@@ -51,6 +52,7 @@ public static class AiModelExtensions
         AiModel.Gemini25Pro => "gemini-2.5-pro",
         AiModel.Gemini25Flash => "gemini-2.5-flash",
         AiModel.Grok41Fast => "grok-4-1-fast-reasoning",
+        AiModel.Grok41FastNonReasoning => "grok-4-1-fast",
         AiModel.Grok4 => "grok-4",
         AiModel.Grok3 => "grok-3-beta",
         _ => throw new ArgumentOutOfRangeException(nameof(model), model, null)
@@ -75,6 +77,7 @@ public static class AiModelExtensions
         AiModel.Gemini25Pro => "Gemini 2.5 Pro",
         AiModel.Gemini25Flash => "Gemini 2.5 Flash",
         AiModel.Grok41Fast => "Grok 4.1 Fast",
+        AiModel.Grok41FastNonReasoning => "Grok 4.1 Fast (Non-Reasoning)",
         AiModel.Grok4 => "Grok 4",
         AiModel.Grok3 => "Grok 3",
         _ => throw new ArgumentOutOfRangeException(nameof(model), model, null)
@@ -92,7 +95,7 @@ public static class AiModelExtensions
         AiModel.Gemini3ProPreview or AiModel.Gemini3FlashPreview or
         AiModel.Gemini25Pro or AiModel.Gemini25Flash => ProviderType.Google,
 
-        AiModel.Grok41Fast or AiModel.Grok4 or AiModel.Grok3 => ProviderType.Xai,
+        AiModel.Grok41Fast or AiModel.Grok41FastNonReasoning or AiModel.Grok4 or AiModel.Grok3 => ProviderType.Xai,
 
         _ => throw new ArgumentOutOfRangeException(nameof(model), model, null)
     };
@@ -104,6 +107,7 @@ public static class AiModelExtensions
         AiModel.Gemini25Pro or AiModel.Gemini25Flash or
         AiModel.Gemini3ProPreview or AiModel.Gemini3FlashPreview or
         AiModel.Grok41Fast or AiModel.Grok4 => true,
+        AiModel.Grok41FastNonReasoning => false,
         _ => false
     };
 
@@ -118,7 +122,7 @@ public static class AiModelExtensions
         AiModel.ClaudeSonnet45 or AiModel.ClaudeHaiku45 => 200000,
         AiModel.Gemini3ProPreview or AiModel.Gemini3FlashPreview or
         AiModel.Gemini25Pro or AiModel.Gemini25Flash => 1000000,
-        AiModel.Grok41Fast => 2000000,
+        AiModel.Grok41Fast or AiModel.Grok41FastNonReasoning => 2000000,
         AiModel.Grok4 => 256000,
         AiModel.Grok3 => 131000,
         _ => throw new ArgumentOutOfRangeException(nameof(model), model, null)
