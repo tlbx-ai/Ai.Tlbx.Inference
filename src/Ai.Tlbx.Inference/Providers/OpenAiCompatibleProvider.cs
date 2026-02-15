@@ -373,11 +373,8 @@ internal abstract class OpenAiCompatibleProvider : IProvider
                 }
             }
 
-            if (request.EnableWebSearch)
-                toolsArray.Add((JsonNode)new JsonObject { ["type"] = "web_search" });
-
-            if (request.EnableXSearch)
-                toolsArray.Add((JsonNode)new JsonObject { ["type"] = "x_search" });
+            if (request.EnableWebSearch || request.EnableXSearch)
+                toolsArray.Add((JsonNode)new JsonObject { ["type"] = "live_search" });
 
             body["tools"] = toolsArray;
         }
