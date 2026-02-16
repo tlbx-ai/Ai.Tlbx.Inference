@@ -79,7 +79,109 @@ internal abstract class OpenAiCompatibleProvider : IProvider
         };
     }
 
-    public async IAsyncEnumerable<ProviderStreamEvent> StreamAsync(
+    public IAsyncEnumerable<ProviderStreamEvent> StreamAsync(
+        ProviderRequest request,
+        CancellationToken ct)
+    {
+        if (request.EnableWebSearch || request.EnableXSearch)
+            return StreamResponsesApiAsync(request, ct);
+
+        return StreamChatCompletionsAsync(request, ct);
+    }
+
+    private async IAsyncEnumerable<ProviderStreamEvent> StreamResponsesApiAsync(
+        ProviderRequest request,
+        [EnumeratorCancellation] CancellationToken ct)
+    {
+        var body = BuildResponsesRequestBody(request);
+        var jsonBytes = SerializeToUtf8Bytes(body);
+
+        _context.Log?.Invoke(InferenceLogLevel.Debug, $"Stream request to {_context.BaseUrl}/v1/responses");
+
+        using var httpRequest = CreateHttpRequest(jsonBytes, "/v1/responses");
+        using var response = await _context.HttpClient.SendAsync(
+            httpRequest,
+            HttpCompletionOption.ResponseHeadersRead,
+            ct).ConfigureAwait(false);
+
+        if (!response.IsSuccessStatusCode)
+        {
+            var errorBody = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+            throw new HttpRequestException(
+                $"API stream request failed with status {response.StatusCode}: {errorBody}",
+                null,
+                response.StatusCode);
+        }
+
+        using var stream = await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
+
+        var toolCallArgs = new Dictionary<string, StringBuilder>();
+
+        await foreach (var data in SseStreamParser.ParseAsync(stream, ct).ConfigureAwait(false))
+        {
+            using var doc = JsonDocument.Parse(data);
+            var root = doc.RootElement;
+
+            var eventType = root.TryGetProperty("type", out var typeEl) ? typeEl.GetString() : null;
+
+            switch (eventType)
+            {
+                case "response.output_text.delta":
+                    var delta = root.GetProperty("delta").GetString();
+                    if (delta is not null)
+                        yield return new ProviderStreamEvent { TextDelta = delta };
+                    break;
+
+                case "response.function_call_arguments.delta":
+                    var callId = root.GetProperty("item_id").GetString()!;
+                    var argDelta = root.GetProperty("delta").GetString() ?? "";
+                    if (!toolCallArgs.TryGetValue(callId, out var sb))
+                    {
+                        sb = new StringBuilder();
+                        toolCallArgs[callId] = sb;
+                    }
+                    sb.Append(argDelta);
+                    break;
+
+                case "response.output_item.done":
+                    if (root.TryGetProperty("item", out var item) &&
+                        item.TryGetProperty("type", out var itemType) &&
+                        itemType.GetString() == "function_call")
+                    {
+                        var tcId = item.GetProperty("id").GetString()!;
+                        var tcName = item.GetProperty("name").GetString()!;
+                        var tcArgs = item.TryGetProperty("arguments", out var argsEl)
+                            ? argsEl.GetString() ?? ""
+                            : toolCallArgs.TryGetValue(tcId, out var accumulated) ? accumulated.ToString() : "";
+
+                        yield return new ProviderStreamEvent
+                        {
+                            ToolCall = new ToolCallRequest
+                            {
+                                Id = tcId,
+                                Name = tcName,
+                                Arguments = tcArgs,
+                            },
+                        };
+                        toolCallArgs.Remove(tcId);
+                    }
+                    break;
+
+                case "response.completed":
+                    if (root.TryGetProperty("response", out var resp) &&
+                        resp.TryGetProperty("usage", out var usageEl))
+                    {
+                        yield return new ProviderStreamEvent
+                        {
+                            Usage = ParseResponsesUsage(usageEl),
+                        };
+                    }
+                    break;
+            }
+        }
+    }
+
+    private async IAsyncEnumerable<ProviderStreamEvent> StreamChatCompletionsAsync(
         ProviderRequest request,
         [EnumeratorCancellation] CancellationToken ct)
     {
@@ -349,33 +451,22 @@ internal abstract class OpenAiCompatibleProvider : IProvider
             body["reasoning_effort"] = MapReasoningEffort(request.ThinkingBudget.Value);
         }
 
-        var hasTools = request.Tools is { Count: > 0 };
-        var hasSearch = request.EnableWebSearch || request.EnableXSearch;
-
-        if (hasTools || hasSearch)
+        if (request.Tools is { Count: > 0 })
         {
             var toolsArray = new JsonArray();
-
-            if (request.Tools is { Count: > 0 })
+            foreach (var t in request.Tools)
             {
-                foreach (var t in request.Tools)
+                toolsArray.Add((JsonNode)new JsonObject
                 {
-                    toolsArray.Add((JsonNode)new JsonObject
+                    ["type"] = "function",
+                    ["function"] = new JsonObject
                     {
-                        ["type"] = "function",
-                        ["function"] = new JsonObject
-                        {
-                            ["name"] = t.Name,
-                            ["description"] = t.Description,
-                            ["parameters"] = JsonNode.Parse(t.ParametersSchema.GetRawText()),
-                        },
-                    });
-                }
+                        ["name"] = t.Name,
+                        ["description"] = t.Description,
+                        ["parameters"] = JsonNode.Parse(t.ParametersSchema.GetRawText()),
+                    },
+                });
             }
-
-            if (request.EnableWebSearch || request.EnableXSearch)
-                toolsArray.Add((JsonNode)new JsonObject { ["type"] = "live_search" });
-
             body["tools"] = toolsArray;
         }
 
@@ -400,6 +491,122 @@ internal abstract class OpenAiCompatibleProvider : IProvider
         }
 
         return body;
+    }
+
+    private JsonObject BuildResponsesRequestBody(ProviderRequest request)
+    {
+        var input = new JsonArray();
+
+        if (request.SystemMessage is not null)
+            input.Add((JsonNode)new JsonObject { ["role"] = "developer", ["content"] = request.SystemMessage });
+
+        foreach (var msg in request.Messages)
+        {
+            switch (msg.Role)
+            {
+                case ChatRole.System:
+                    input.Add((JsonNode)new JsonObject { ["role"] = "developer", ["content"] = msg.Content ?? "" });
+                    break;
+                case ChatRole.User:
+                    input.Add((JsonNode)new JsonObject { ["role"] = "user", ["content"] = msg.Content ?? "" });
+                    break;
+                case ChatRole.Assistant when msg.ToolCalls is { Count: > 0 }:
+                    foreach (var tc in msg.ToolCalls)
+                    {
+                        input.Add((JsonNode)new JsonObject
+                        {
+                            ["type"] = "function_call",
+                            ["id"] = tc.Id,
+                            ["call_id"] = tc.Id,
+                            ["name"] = tc.Name,
+                            ["arguments"] = tc.Arguments,
+                            ["status"] = "completed",
+                        });
+                    }
+                    break;
+                case ChatRole.Assistant:
+                    break;
+                case ChatRole.Tool:
+                    input.Add((JsonNode)new JsonObject
+                    {
+                        ["type"] = "function_call_output",
+                        ["call_id"] = msg.ToolCallId,
+                        ["output"] = msg.Content ?? "",
+                    });
+                    break;
+            }
+        }
+
+        var tools = new JsonArray();
+
+        if (request.Tools is { Count: > 0 })
+        {
+            foreach (var t in request.Tools)
+            {
+                tools.Add((JsonNode)new JsonObject
+                {
+                    ["type"] = "function",
+                    ["name"] = t.Name,
+                    ["description"] = t.Description,
+                    ["parameters"] = JsonNode.Parse(t.ParametersSchema.GetRawText()),
+                });
+            }
+        }
+
+        if (request.EnableWebSearch)
+            tools.Add((JsonNode)new JsonObject { ["type"] = "web_search" });
+        if (request.EnableXSearch)
+            tools.Add((JsonNode)new JsonObject { ["type"] = "x_search" });
+
+        var body = new JsonObject
+        {
+            ["model"] = request.ModelApiName,
+            ["input"] = input,
+            ["stream"] = true,
+            ["store"] = false,
+        };
+
+        if (tools.Count > 0)
+            body["tools"] = tools;
+
+        if (request.Temperature.HasValue)
+            body["temperature"] = request.Temperature.Value;
+
+        if (request.MaxTokens.HasValue)
+            body["max_output_tokens"] = request.MaxTokens.Value;
+
+        if (request.TopP.HasValue)
+            body["top_p"] = request.TopP.Value;
+
+        return body;
+    }
+
+    private static TokenUsage ParseResponsesUsage(JsonElement usage)
+    {
+        var inputTokens = usage.TryGetProperty("input_tokens", out var it) ? it.GetInt32() : 0;
+        var outputTokens = usage.TryGetProperty("output_tokens", out var ot) ? ot.GetInt32() : 0;
+
+        var cacheReadTokens = 0;
+        if (usage.TryGetProperty("input_tokens_details", out var itd) &&
+            itd.TryGetProperty("cached_tokens", out var cached))
+        {
+            cacheReadTokens = cached.GetInt32();
+        }
+
+        var thinkingTokens = 0;
+        if (usage.TryGetProperty("output_tokens_details", out var otd) &&
+            otd.TryGetProperty("reasoning_tokens", out var reasoning))
+        {
+            thinkingTokens = reasoning.GetInt32();
+        }
+
+        return new TokenUsage
+        {
+            InputTokens = inputTokens,
+            OutputTokens = outputTokens,
+            CacheReadTokens = cacheReadTokens,
+            ThinkingTokens = thinkingTokens,
+        };
     }
 
     private static ReadOnlyMemory<byte> SerializeToUtf8Bytes(JsonObject body)
