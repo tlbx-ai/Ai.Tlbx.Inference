@@ -33,7 +33,7 @@ When user says **"publish a patch/minor/major release"**:
 2. `dotnet build` + `dotnet test` — must pass
 3. Commit: `"Bump version to X.Y.Z"`
 4. `dotnet pack src\Ai.Tlbx.Inference\Ai.Tlbx.Inference.csproj -c Release -p:IncludeSymbols=true -p:SymbolPackageFormat=snupkg`
-5. `dotnet nuget push` both `.nupkg` and `.snupkg` using `$NUGET_API_KEY` env var to `https://api.nuget.org/v3/index.json`
+5. `.\scripts\publish-nuget.ps1 -Version X.Y.Z`
 6. `git push` to main
 7. `git tag vX.Y.Z && git push origin vX.Y.Z`
 8. `gh release create vX.Y.Z --generate-notes`

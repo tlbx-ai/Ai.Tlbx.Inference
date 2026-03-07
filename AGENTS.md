@@ -86,7 +86,12 @@ If the user asks to publish a patch, minor, or major release, follow this exact 
 dotnet pack src\Ai.Tlbx.Inference\Ai.Tlbx.Inference.csproj -c Release -p:IncludeSymbols=true -p:SymbolPackageFormat=snupkg
 ```
 
-5. Push both the `.nupkg` and `.snupkg` to NuGet using `$NUGET_API_KEY` and `https://api.nuget.org/v3/index.json`.
+5. Publish to NuGet with:
+
+```powershell
+.\scripts\publish-nuget.ps1 -Version X.Y.Z
+```
+
 6. Push `main`.
 7. Create and push tag `vX.Y.Z`.
 8. Create the GitHub release with generated notes:
