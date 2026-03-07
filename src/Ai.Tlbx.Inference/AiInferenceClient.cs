@@ -1,8 +1,8 @@
-using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Text.Json.Serialization.Metadata;
 using Ai.Tlbx.Inference.Configuration;
+using Ai.Tlbx.Inference.Json;
 using Ai.Tlbx.Inference.Providers;
 using Ai.Tlbx.Inference.Resilience;
 using Ai.Tlbx.Inference.Schema;
@@ -12,11 +12,6 @@ namespace Ai.Tlbx.Inference;
 
 public sealed class AiInferenceClient : IAiInferenceClient
 {
-    private static readonly JsonSerializerOptions _jsonOptions = new()
-    {
-        PropertyNameCaseInsensitive = true,
-    };
-
     private readonly Dictionary<ProviderType, IProvider> _providers = new();
     private readonly ResiliencePipeline<HttpResponseMessage> _resiliencePipeline;
     private readonly Action<InferenceLogLevel, string>? _log;
@@ -35,7 +30,8 @@ public sealed class AiInferenceClient : IAiInferenceClient
 
     public async Task<CompletionResponse<string>> CompleteAsync(CompletionRequest request, CancellationToken ct = default)
     {
-        var provider = GetProvider(request.Model.GetProvider());
+        var descriptor = AiModelCatalog.Get(request.Model);
+        var provider = GetProvider(descriptor.Provider);
         var providerRequest = BuildProviderRequest(request);
         var response = await provider.CompleteAsync(providerRequest, ct).ConfigureAwait(false);
 
@@ -45,46 +41,16 @@ public sealed class AiInferenceClient : IAiInferenceClient
             Usage = response.Usage,
             Model = request.Model,
             StopReason = response.StopReason,
-        };
-    }
-
-    [RequiresUnreferencedCode("Use the overload accepting JsonTypeInfo<T> for AOT compatibility.")]
-    [RequiresDynamicCode("Use the overload accepting JsonTypeInfo<T> for AOT compatibility.")]
-    public async Task<CompletionResponse<T>> CompleteAsync<T>(CompletionRequest request, CancellationToken ct = default)
-    {
-        if (typeof(T) == typeof(string))
-        {
-            var stringResult = await CompleteAsync(request, ct).ConfigureAwait(false);
-            return (CompletionResponse<T>)(object)stringResult;
-        }
-
-        var schema = request.JsonSchema ?? JsonSchemaGenerator.GenerateAsString(typeof(T));
-        var provider = GetProvider(request.Model.GetProvider());
-        var providerRequest = BuildProviderRequest(request, schema);
-        var response = await provider.CompleteAsync(providerRequest, ct).ConfigureAwait(false);
-
-        var content = JsonSerializer.Deserialize<T>(response.Content, _jsonOptions)!;
-
-        return new CompletionResponse<T>
-        {
-            Content = content,
-            Usage = response.Usage,
-            Model = request.Model,
-            StopReason = response.StopReason,
+            Diagnostics = BuildDiagnostics(descriptor, response),
         };
     }
 
     public async Task<CompletionResponse<T>> CompleteAsync<T>(CompletionRequest request, JsonTypeInfo<T> jsonTypeInfo, CancellationToken ct = default)
     {
-        if (typeof(T) == typeof(string))
-        {
-            var stringResult = await CompleteAsync(request, ct).ConfigureAwait(false);
-            return (CompletionResponse<T>)(object)stringResult;
-        }
-
         var schema = request.JsonSchema
             ?? throw new InvalidOperationException("CompletionRequest.JsonSchema must be provided for AOT-compatible structured output.");
-        var provider = GetProvider(request.Model.GetProvider());
+        var descriptor = AiModelCatalog.Get(request.Model);
+        var provider = GetProvider(descriptor.Provider);
         var providerRequest = BuildProviderRequest(request, schema);
         var response = await provider.CompleteAsync(providerRequest, ct).ConfigureAwait(false);
 
@@ -96,6 +62,7 @@ public sealed class AiInferenceClient : IAiInferenceClient
             Usage = response.Usage,
             Model = request.Model,
             StopReason = response.StopReason,
+            Diagnostics = BuildDiagnostics(descriptor, response),
         };
     }
 
@@ -110,24 +77,63 @@ public sealed class AiInferenceClient : IAiInferenceClient
         {
             if (e.TextDelta is not null)
             {
-                yield return e.TextDelta;
+                foreach (var normalizedChunk in SplitStreamingText(e.TextDelta))
+                {
+                    yield return normalizedChunk;
+                }
             }
         }
     }
 
-    [RequiresUnreferencedCode("Use the overload accepting JsonTypeInfo<T> for AOT compatibility.")]
-    [RequiresDynamicCode("Use the overload accepting JsonTypeInfo<T> for AOT compatibility.")]
-    public async Task<ToolExecutionResponse<T>> CompleteWithToolsAsync<T>(
+    private static IEnumerable<string> SplitStreamingText(string text)
+    {
+        const int preferredChunkLength = 160;
+
+        if (text.Length <= preferredChunkLength)
+        {
+            yield return text;
+            yield break;
+        }
+
+        var start = 0;
+        while (start < text.Length)
+        {
+            var remaining = text.Length - start;
+            if (remaining <= preferredChunkLength)
+            {
+                yield return text[start..];
+                yield break;
+            }
+
+            var end = start + preferredChunkLength;
+            while (end > start && !char.IsWhiteSpace(text[end - 1]))
+            {
+                end--;
+            }
+
+            if (end == start)
+            {
+                end = start + preferredChunkLength;
+            }
+
+            yield return text[start..end];
+            start = end;
+        }
+    }
+
+    public async Task<ToolExecutionResponse<string>> CompleteWithToolsAsync(
         CompletionRequest request,
         IReadOnlyList<ToolDefinition> tools,
         Func<ToolCallRequest, Task<ToolCallResult>> toolExecutor,
         int maxIterations = 20,
         CancellationToken ct = default)
     {
-        var provider = GetProvider(request.Model.GetProvider());
+        var descriptor = AiModelCatalog.Get(request.Model);
+        var provider = GetProvider(descriptor.Provider);
         var messages = new List<ChatMessage>(request.Messages);
         var totalUsage = new TokenUsage();
         var iterations = 0;
+        CompletionDiagnostics? finalDiagnostics = null;
         var baseReq = BuildProviderRequest(request, tools: tools);
 
         while (iterations < maxIterations)
@@ -139,18 +145,17 @@ public sealed class AiInferenceClient : IAiInferenceClient
 
             if (response.ToolCalls is null or { Count: 0 })
             {
-                var content = typeof(T) == typeof(string)
-                    ? (T)(object)response.Content
-                    : JsonSerializer.Deserialize<T>(response.Content, _jsonOptions)!;
-
-                return new ToolExecutionResponse<T>
+                return new ToolExecutionResponse<string>
                 {
-                    Content = content,
+                    Content = response.Content,
                     Usage = totalUsage,
                     Iterations = iterations,
                     Messages = messages,
+                    Diagnostics = finalDiagnostics ?? BuildDiagnostics(descriptor, response),
                 };
             }
+
+            finalDiagnostics = BuildDiagnostics(descriptor, response);
 
             messages.Add(new ChatMessage
             {
@@ -182,10 +187,12 @@ public sealed class AiInferenceClient : IAiInferenceClient
         int maxIterations = 20,
         CancellationToken ct = default)
     {
-        var provider = GetProvider(request.Model.GetProvider());
+        var descriptor = AiModelCatalog.Get(request.Model);
+        var provider = GetProvider(descriptor.Provider);
         var messages = new List<ChatMessage>(request.Messages);
         var totalUsage = new TokenUsage();
         var iterations = 0;
+        CompletionDiagnostics? finalDiagnostics = null;
         var baseReq = BuildProviderRequest(request, tools: tools);
 
         while (iterations < maxIterations)
@@ -197,9 +204,7 @@ public sealed class AiInferenceClient : IAiInferenceClient
 
             if (response.ToolCalls is null or { Count: 0 })
             {
-                var content = typeof(T) == typeof(string)
-                    ? (T)(object)response.Content
-                    : JsonSerializer.Deserialize(response.Content, jsonTypeInfo)!;
+                var content = JsonSerializer.Deserialize(response.Content, jsonTypeInfo)!;
 
                 return new ToolExecutionResponse<T>
                 {
@@ -207,8 +212,11 @@ public sealed class AiInferenceClient : IAiInferenceClient
                     Usage = totalUsage,
                     Iterations = iterations,
                     Messages = messages,
+                    Diagnostics = finalDiagnostics ?? BuildDiagnostics(descriptor, response),
                 };
             }
+
+            finalDiagnostics = BuildDiagnostics(descriptor, response);
 
             messages.Add(new ChatMessage
             {
@@ -381,7 +389,8 @@ public sealed class AiInferenceClient : IAiInferenceClient
         return new ProviderRequest
         {
             ModelApiName = request.Model.ToApiName(),
-            Messages = request.Messages,
+            PreferredEndpoint = AiModelCatalog.Get(request.Model).PreferredEndpoint,
+            Messages = CloneMessages(request.Messages),
             SystemMessage = request.SystemMessage,
             Temperature = request.Temperature,
             MaxTokens = request.MaxTokens,
@@ -389,14 +398,132 @@ public sealed class AiInferenceClient : IAiInferenceClient
             EnableCache = request.EnableCache,
             JsonSchema = jsonSchemaOverride ?? request.JsonSchema,
             TopP = request.TopP,
-            StopSequences = request.StopSequences,
-            Tools = tools,
+            StopSequences = request.StopSequences is null ? null : [.. request.StopSequences],
+            Tools = CloneTools(tools),
             EnableWebSearch = request.EnableWebSearch,
             EnableXSearch = request.EnableXSearch,
         };
     }
 
-    private static IProvider CreateProvider(
+    private static IReadOnlyList<ChatMessage> CloneMessages(IReadOnlyList<ChatMessage> messages)
+    {
+        var clones = new ChatMessage[messages.Count];
+        for (var i = 0; i < messages.Count; i++)
+        {
+            clones[i] = CloneMessage(messages[i]);
+        }
+
+        return clones;
+    }
+
+    private static ChatMessage CloneMessage(ChatMessage message)
+    {
+        return new ChatMessage
+        {
+            Role = message.Role,
+            Content = message.Content,
+            ToolCallId = message.ToolCallId,
+            ToolCalls = CloneToolCalls(message.ToolCalls),
+            Attachments = CloneAttachments(message.Attachments),
+        };
+    }
+
+    private static ToolCallRequest CloneToolCallRequest(ToolCallRequest toolCall)
+    {
+        return new ToolCallRequest
+        {
+            Id = toolCall.Id,
+            Name = toolCall.Name,
+            Arguments = toolCall.Arguments,
+        };
+    }
+
+    private static DocumentAttachment CloneAttachment(DocumentAttachment attachment)
+    {
+        return new DocumentAttachment
+        {
+            FileName = attachment.FileName,
+            MimeType = attachment.MimeType,
+            Content = attachment.Content.ToArray(),
+        };
+    }
+
+    private static IReadOnlyList<ToolDefinition>? CloneTools(IReadOnlyList<ToolDefinition>? tools)
+    {
+        if (tools is null)
+        {
+            return null;
+        }
+
+        var clones = new ToolDefinition[tools.Count];
+        for (var i = 0; i < tools.Count; i++)
+        {
+            var tool = tools[i];
+            clones[i] = new ToolDefinition
+            {
+                Name = tool.Name,
+                Description = tool.Description,
+                ParametersSchema = tool.ParametersSchema.Clone(),
+            };
+        }
+
+        return clones;
+    }
+
+    private static IReadOnlyList<ToolCallRequest>? CloneToolCalls(IReadOnlyList<ToolCallRequest>? toolCalls)
+    {
+        if (toolCalls is null)
+        {
+            return null;
+        }
+
+        var clones = new ToolCallRequest[toolCalls.Count];
+        for (var i = 0; i < toolCalls.Count; i++)
+        {
+            clones[i] = CloneToolCallRequest(toolCalls[i]);
+        }
+
+        return clones;
+    }
+
+    private static IReadOnlyList<DocumentAttachment>? CloneAttachments(IReadOnlyList<DocumentAttachment>? attachments)
+    {
+        if (attachments is null)
+        {
+            return null;
+        }
+
+        var clones = new DocumentAttachment[attachments.Count];
+        for (var i = 0; i < attachments.Count; i++)
+        {
+            clones[i] = CloneAttachment(attachments[i]);
+        }
+
+        return clones;
+    }
+
+    private static CompletionDiagnostics BuildDiagnostics(AiModelDescriptor descriptor, ProviderResponse response)
+    {
+        var stopReason = response.StopReason;
+        var returnedContent = !string.IsNullOrWhiteSpace(response.Content);
+        var outputMayBeTruncated =
+            string.Equals(stopReason, "length", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(stopReason, "max_tokens", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(stopReason, "MAX_TOKENS", StringComparison.OrdinalIgnoreCase) ||
+            (!returnedContent && response.Usage.ThinkingTokens > 0);
+
+        return new CompletionDiagnostics
+        {
+            Provider = descriptor.Provider,
+            EndpointFamily = response.EndpointFamily,
+            StopReason = stopReason,
+            ReturnedContent = returnedContent,
+            OutputMayBeTruncated = outputMayBeTruncated,
+            Note = response.DiagnosticNote,
+        };
+    }
+
+    private IProvider CreateProvider(
         ProviderType providerType,
         ProviderCredentials creds,
         HttpClient httpClient,
@@ -415,6 +542,7 @@ public sealed class AiInferenceClient : IAiInferenceClient
             },
             ApiKey = creds.ApiKey ?? "",
             Log = log,
+            ResiliencePipeline = _resiliencePipeline,
         };
 
         return providerType switch
@@ -427,11 +555,11 @@ public sealed class AiInferenceClient : IAiInferenceClient
         };
     }
 
-    private static GoogleProvider CreateGoogleProvider(ProviderRequestContext context, ProviderCredentials creds)
+    private GoogleProvider CreateGoogleProvider(ProviderRequestContext context, ProviderCredentials creds)
     {
         if (creds.ServiceAccountJson is not null)
         {
-            var tokenProvider = new GoogleTokenProvider(creds.ServiceAccountJson);
+            var tokenProvider = new GoogleTokenProvider(context.HttpClient, creds.ServiceAccountJson);
             return new GoogleProvider(context, tokenProvider, creds.ProjectId, creds.Location);
         }
 

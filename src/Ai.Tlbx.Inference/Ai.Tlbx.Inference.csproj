@@ -4,16 +4,19 @@
     <TargetFrameworks>net9.0;net10.0</TargetFrameworks>
     <RootNamespace>Ai.Tlbx.Inference</RootNamespace>
     <PackageId>Ai.Tlbx.Inference</PackageId>
-    <Description>Universal .NET AI inference client for OpenAI, Anthropic, Google, and xAI. Supports completions, streaming, structured output, tool calling, embeddings, and image generation.</Description>
+    <Description>Trim-friendly .NET AI inference client for OpenAI, Anthropic, Google, and xAI with streaming, document attachments, structured output, tool calling, embeddings, and image generation.</Description>
     <PackageProjectUrl>https://github.com/tlbx-ai/Ai.Tlbx.Inference</PackageProjectUrl>
     <RepositoryUrl>https://github.com/tlbx-ai/Ai.Tlbx.Inference</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
-    <PackageTags>ai;inference;openai;anthropic;google;gemini;xai;grok;llm;embeddings;tool-calling;streaming</PackageTags>
+    <PackageTags>ai;inference;openai;anthropic;google;gemini;xai;grok;llm;embeddings;tool-calling;streaming;attachments;aot;trimming</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageReleaseNotes>2.0.0: strict AOT/trim-safe public API, source-generated typed completion/tool-result overloads, native Google Vertex service-account auth, streaming and document attachment coverage across providers, and refreshed supported model catalog.</PackageReleaseNotes>
+    <PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <NoWarn>CS1591</NoWarn>
     <IsAotCompatible>true</IsAotCompatible>
     <IsTrimmable>true</IsTrimmable>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
   </PropertyGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="Ai.Tlbx.Inference.Tests" />
@@ -25,7 +28,6 @@
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="9.0.*" />
     <PackageReference Include="Microsoft.Extensions.Http" Version="9.0.*" />
     <PackageReference Include="Polly.Core" Version="8.*" />
-    <PackageReference Include="Google.Apis.Auth" Version="1.73.*" />
     <PackageReference Include="Microsoft.SourceLink.GitHub" Version="8.*" PrivateAssets="All" />
   </ItemGroup>
 </Project>

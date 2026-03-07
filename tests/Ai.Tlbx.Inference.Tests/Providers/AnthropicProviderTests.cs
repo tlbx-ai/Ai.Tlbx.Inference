@@ -288,6 +288,100 @@ public sealed class AnthropicProviderTests
                 CancellationToken.None));
     }
 
+    [Fact]
+    public async Task CompleteAsync_WithTextAttachment_SendsDocumentBlock()
+    {
+        string? capturedBody = null;
+        var json = BuildAnthropicResponse("Hello");
+        var handler = new MockHttpHandler(async req =>
+        {
+            capturedBody = await req.Content!.ReadAsStringAsync();
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(json, System.Text.Encoding.UTF8, "application/json"),
+            };
+        });
+
+        var provider = new AnthropicProvider(new ProviderRequestContext
+        {
+            HttpClient = new HttpClient(handler),
+            BaseUrl = "https://api.anthropic.com",
+            ApiKey = "test",
+        });
+
+        await provider.CompleteAsync(new ProviderRequest
+        {
+            ModelApiName = "claude-opus-4-6",
+            Messages =
+            [
+                new ChatMessage
+                {
+                    Role = ChatRole.User,
+                    Content = "Read the attachment",
+                    Attachments =
+                    [
+                        new DocumentAttachment
+                        {
+                            FileName = "notes.txt",
+                            MimeType = "text/plain",
+                            Content = System.Text.Encoding.UTF8.GetBytes("Status: GREEN"),
+                        }
+                    ],
+                }
+            ],
+        }, CancellationToken.None);
+
+        Assert.NotNull(capturedBody);
+        using var doc = JsonDocument.Parse(capturedBody!);
+        var content = doc.RootElement.GetProperty("messages")[0].GetProperty("content");
+        Assert.Equal(JsonValueKind.Array, content.ValueKind);
+        Assert.Equal("document", content[0].GetProperty("type").GetString());
+        Assert.Equal("text/plain", content[0].GetProperty("source").GetProperty("media_type").GetString());
+    }
+
+    [Fact]
+    public async Task StreamAsync_YieldsMultipleTextDeltas()
+    {
+        var sse = """
+        event: content_block_delta
+        data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"Hello "}}
+        event: content_block_delta
+        data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"Claude"}}
+        event: message_delta
+        data: {"type":"message_delta","usage":{"output_tokens":2}}
+        event: message_stop
+        data: {"type":"message_stop"}
+        """.Replace("\n", "\r\n");
+
+        var handler = new MockHttpHandler(async _ =>
+        {
+            await Task.CompletedTask;
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(sse, System.Text.Encoding.UTF8, "text/event-stream"),
+            };
+        });
+
+        var provider = new AnthropicProvider(new ProviderRequestContext
+        {
+            HttpClient = new HttpClient(handler),
+            BaseUrl = "https://api.anthropic.com",
+            ApiKey = "test",
+        });
+
+        var chunks = new List<string>();
+        await foreach (var evt in provider.StreamAsync(BuildSimpleRequest(), CancellationToken.None))
+        {
+            if (evt.TextDelta is not null)
+            {
+                chunks.Add(evt.TextDelta);
+            }
+        }
+
+        Assert.Equal(2, chunks.Count);
+        Assert.Equal("Hello Claude", string.Concat(chunks));
+    }
+
     private static AnthropicProvider CreateProvider(string responseJson)
     {
         var handler = new MockHttpHandler(async _ =>

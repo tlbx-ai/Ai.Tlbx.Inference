@@ -18,6 +18,11 @@ namespace Ai.Tlbx.Inference.Json;
 [JsonSerializable(typeof(ImageGenerationRequest))]
 [JsonSerializable(typeof(CompletionResponse<string>))]
 [JsonSerializable(typeof(ToolExecutionResponse<string>))]
-public partial class InferenceJsonContext : JsonSerializerContext
+[JsonSerializable(typeof(OpenAiFileUploadResponseDto))]
+[JsonSerializable(typeof(OpenAiEmbeddingResponseDto))]
+[JsonSerializable(typeof(GoogleEmbeddingResponseDto))]
+[JsonSerializable(typeof(GoogleBatchEmbeddingResponseDto))]
+[JsonSerializable(typeof(GoogleImageGenerationResponseDto))]
+internal partial class InferenceJsonContext : JsonSerializerContext
 {
 }

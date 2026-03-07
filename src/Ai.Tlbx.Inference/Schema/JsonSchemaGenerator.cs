@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Collections;
 using System.Collections.Concurrent;
 using System.Diagnostics.CodeAnalysis;
@@ -30,11 +31,11 @@ internal static class JsonSchemaGenerator
     {
         return _cache.GetOrAdd(type, static t =>
         {
-            using var stream = new MemoryStream();
-            using var writer = new Utf8JsonWriter(stream);
+            var buffer = new ArrayBufferWriter<byte>();
+            using var writer = new Utf8JsonWriter(buffer);
             WriteSchema(writer, t);
             writer.Flush();
-            return Encoding.UTF8.GetString(stream.ToArray());
+            return Encoding.UTF8.GetString(buffer.WrittenSpan);
         });
     }
 
@@ -123,6 +124,7 @@ internal static class JsonSchemaGenerator
         writer.WriteString("type", "object");
 
         var properties = type.GetProperties(BindingFlags.Public | BindingFlags.Instance);
+        var nullabilityContext = new NullabilityInfoContext();
         var requiredProps = new List<string>();
 
         writer.WritePropertyName("properties");
@@ -138,7 +140,6 @@ internal static class JsonSchemaGenerator
 
             var propType = prop.PropertyType;
             var isNullable = Nullable.GetUnderlyingType(propType) is not null;
-            var nullabilityContext = new NullabilityInfoContext();
             var nullabilityInfo = nullabilityContext.Create(prop);
             var isReferenceNullable = !propType.IsValueType && nullabilityInfo.WriteState == NullabilityState.Nullable;
 

@@ -12,6 +12,7 @@ internal interface IProvider
 internal sealed record ProviderRequest
 {
     public required string ModelApiName { get; init; }
+    public ModelEndpointFamily PreferredEndpoint { get; init; } = ModelEndpointFamily.ChatCompletions;
     public required IReadOnlyList<ChatMessage> Messages { get; init; }
     public string? SystemMessage { get; init; }
     public double? Temperature { get; init; }
@@ -30,8 +31,10 @@ internal sealed record ProviderResponse
 {
     public required string Content { get; init; }
     public required TokenUsage Usage { get; init; }
+    public required ModelEndpointFamily EndpointFamily { get; init; }
     public string? StopReason { get; init; }
     public IReadOnlyList<ToolCallRequest>? ToolCalls { get; init; }
+    public string? DiagnosticNote { get; init; }
 }
 
 internal sealed record ProviderStreamEvent

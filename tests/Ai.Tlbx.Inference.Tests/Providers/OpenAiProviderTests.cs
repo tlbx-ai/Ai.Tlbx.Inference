@@ -192,6 +192,174 @@ public sealed class OpenAiProviderTests
         Assert.Equal("gpt-5.2", doc.RootElement.GetProperty("model").GetString());
     }
 
+    [Fact]
+    public async Task CompleteAsync_WithAttachment_UploadsFileAndUsesResponsesApi()
+    {
+        var requests = new List<(string Method, string Url, string? Body)>();
+        var handler = new MockHttpHandler(async req =>
+        {
+            var body = req.Content is null ? null : await req.Content.ReadAsStringAsync();
+            requests.Add((req.Method.Method, req.RequestUri!.ToString(), body));
+
+            if (req.RequestUri!.AbsolutePath == "/v1/files" && req.Method == HttpMethod.Post)
+            {
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("""{"id":"file_123"}""", System.Text.Encoding.UTF8, "application/json"),
+                };
+            }
+
+            if (req.RequestUri!.AbsolutePath == "/v1/responses" && req.Method == HttpMethod.Post)
+            {
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("""
+                    {
+                        "status": "completed",
+                        "output": [{
+                            "type": "message",
+                            "content": [{ "type": "output_text", "text": "done" }]
+                        }],
+                        "usage": { "input_tokens": 10, "output_tokens": 2 }
+                    }
+                    """, System.Text.Encoding.UTF8, "application/json"),
+                };
+            }
+
+            if (req.RequestUri!.AbsolutePath == "/v1/files/file_123" && req.Method == HttpMethod.Delete)
+            {
+                return new HttpResponseMessage(HttpStatusCode.OK);
+            }
+
+            throw new InvalidOperationException($"Unexpected request: {req.Method} {req.RequestUri}");
+        });
+
+        var provider = new OpenAiProvider(new ProviderRequestContext
+        {
+            HttpClient = new HttpClient(handler),
+            BaseUrl = "https://api.openai.com",
+            ApiKey = "test-key",
+        });
+
+        var response = await provider.CompleteAsync(new ProviderRequest
+        {
+            ModelApiName = "gpt-5",
+            Messages =
+            [
+                new ChatMessage
+                {
+                    Role = ChatRole.User,
+                    Content = "Read the attachment",
+                    Attachments =
+                    [
+                        new DocumentAttachment
+                        {
+                            FileName = "notes.txt",
+                            MimeType = "text/plain",
+                            Content = System.Text.Encoding.UTF8.GetBytes("Status: GREEN"),
+                        }
+                    ],
+                }
+            ],
+        }, CancellationToken.None);
+
+        Assert.Equal("done", response.Content);
+        Assert.Contains(requests, request => request.Url.EndsWith("/v1/files", StringComparison.Ordinal));
+        Assert.Contains(requests, request => request.Url.EndsWith("/v1/responses", StringComparison.Ordinal));
+        Assert.Contains(requests, request => request.Url.EndsWith("/v1/files/file_123", StringComparison.Ordinal));
+        Assert.Contains(requests, request => request.Body?.Contains("\"input_file\"", StringComparison.Ordinal) == true);
+    }
+
+    [Fact]
+    public async Task StreamAsync_ResponsesApiModel_UsesResponsesEndpoint()
+    {
+        HttpRequestMessage? captured = null;
+        var sseData = """
+        data: {"type":"response.output_text.delta","delta":"Hello "}
+
+        data: {"type":"response.output_text.delta","delta":"world"}
+
+        data: {"type":"response.completed","response":{"usage":{"input_tokens":5,"output_tokens":2}}}
+
+        """;
+
+        var handler = new MockHttpHandler(async req =>
+        {
+            captured = req;
+            await Task.CompletedTask;
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(sseData, System.Text.Encoding.UTF8, "text/event-stream"),
+            };
+        });
+
+        var provider = new OpenAiProvider(new ProviderRequestContext
+        {
+            HttpClient = new HttpClient(handler),
+            BaseUrl = "https://api.openai.com",
+            ApiKey = "test-key",
+        });
+
+        var chunks = new List<string>();
+        await foreach (var evt in provider.StreamAsync(new ProviderRequest
+        {
+            ModelApiName = "gpt-5.2-pro",
+            PreferredEndpoint = ModelEndpointFamily.Responses,
+            Messages = [new ChatMessage { Role = ChatRole.User, Content = "Hello" }],
+        }, CancellationToken.None))
+        {
+            if (evt.TextDelta is not null)
+            {
+                chunks.Add(evt.TextDelta);
+            }
+        }
+
+        Assert.NotNull(captured);
+        Assert.Equal("https://api.openai.com/v1/responses", captured!.RequestUri!.ToString());
+        Assert.Equal(2, chunks.Count);
+        Assert.Equal("Hello world", string.Concat(chunks));
+    }
+
+    [Fact]
+    public async Task StreamAsync_ResponsesApi_EmitsCompletedTextWhenNoDeltaWasStreamed()
+    {
+        var sseData = """
+        data: {"type":"response.completed","response":{"output":[{"type":"message","content":[{"type":"output_text","text":"Hello world from completed event"}]}],"usage":{"input_tokens":5,"output_tokens":6}}}
+
+        """;
+
+        var provider = new OpenAiProvider(new ProviderRequestContext
+        {
+            HttpClient = new HttpClient(new MockHttpHandler(async _ =>
+            {
+                await Task.CompletedTask;
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(sseData, System.Text.Encoding.UTF8, "text/event-stream"),
+                };
+            })),
+            BaseUrl = "https://api.openai.com",
+            ApiKey = "test-key",
+        });
+
+        var chunks = new List<string>();
+        await foreach (var evt in provider.StreamAsync(new ProviderRequest
+        {
+            ModelApiName = "gpt-5",
+            PreferredEndpoint = ModelEndpointFamily.Responses,
+            Messages = [new ChatMessage { Role = ChatRole.User, Content = "Hello" }],
+        }, CancellationToken.None))
+        {
+            if (evt.TextDelta is not null)
+            {
+                chunks.Add(evt.TextDelta);
+            }
+        }
+
+        Assert.Single(chunks);
+        Assert.Equal("Hello world from completed event", chunks[0]);
+    }
+
     private static ProviderRequest BuildSimpleRequest(string model = "gpt-5.2") => new()
     {
         ModelApiName = model,

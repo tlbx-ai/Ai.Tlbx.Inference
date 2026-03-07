@@ -6,6 +6,8 @@ internal sealed class XaiProvider : OpenAiCompatibleProvider
     {
     }
 
+    protected override string GetFileUploadPurpose() => "assistants";
+
     protected override string MapReasoningEffort(int thinkingBudget) => thinkingBudget switch
     {
         < 10000 => "low",

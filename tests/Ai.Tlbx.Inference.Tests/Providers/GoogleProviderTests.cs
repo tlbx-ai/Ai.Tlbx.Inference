@@ -180,6 +180,94 @@ public sealed class GoogleProviderTests
         Assert.Contains("Berlin", response.ToolCalls[0].Arguments);
     }
 
+    [Fact]
+    public async Task CompleteAsync_WithTextAttachment_SendsInlineData()
+    {
+        string? capturedBody = null;
+        var json = BuildGoogleResponse("Hi");
+        var handler = new MockHttpHandler(async req =>
+        {
+            capturedBody = await req.Content!.ReadAsStringAsync();
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(json, System.Text.Encoding.UTF8, "application/json"),
+            };
+        });
+
+        var provider = new GoogleProvider(new ProviderRequestContext
+        {
+            HttpClient = new HttpClient(handler),
+            BaseUrl = "https://generativelanguage.googleapis.com",
+            ApiKey = "test",
+        });
+
+        await provider.CompleteAsync(new ProviderRequest
+        {
+            ModelApiName = "gemini-2.5-pro",
+            Messages =
+            [
+                new ChatMessage
+                {
+                    Role = ChatRole.User,
+                    Content = "Read the attachment",
+                    Attachments =
+                    [
+                        new DocumentAttachment
+                        {
+                            FileName = "notes.txt",
+                            MimeType = "text/plain",
+                            Content = System.Text.Encoding.UTF8.GetBytes("Status: GREEN"),
+                        }
+                    ],
+                }
+            ],
+        }, CancellationToken.None);
+
+        Assert.NotNull(capturedBody);
+        using var doc = JsonDocument.Parse(capturedBody!);
+        var parts = doc.RootElement.GetProperty("contents")[0].GetProperty("parts");
+        Assert.Equal("text/plain", parts[0].GetProperty("inline_data").GetProperty("mime_type").GetString());
+    }
+
+    [Fact]
+    public async Task StreamAsync_YieldsMultipleTextDeltas()
+    {
+        var sse = """
+        data: {"candidates":[{"content":{"parts":[{"text":"Hello "}]} }]}
+
+        data: {"candidates":[{"content":{"parts":[{"text":"Gemini"}]} }],"usageMetadata":{"promptTokenCount":5,"candidatesTokenCount":2}}
+
+        """;
+
+        var handler = new MockHttpHandler(async _ =>
+        {
+            await Task.CompletedTask;
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(sse, System.Text.Encoding.UTF8, "text/event-stream"),
+            };
+        });
+
+        var provider = new GoogleProvider(new ProviderRequestContext
+        {
+            HttpClient = new HttpClient(handler),
+            BaseUrl = "https://generativelanguage.googleapis.com",
+            ApiKey = "test",
+        });
+
+        var chunks = new List<string>();
+        await foreach (var evt in provider.StreamAsync(BuildSimpleRequest(), CancellationToken.None))
+        {
+            if (evt.TextDelta is not null)
+            {
+                chunks.Add(evt.TextDelta);
+            }
+        }
+
+        Assert.Equal(2, chunks.Count);
+        Assert.Equal("Hello Gemini", string.Concat(chunks));
+    }
+
     private static GoogleProvider CreateProvider(string responseJson)
     {
         var handler = new MockHttpHandler(async _ =>

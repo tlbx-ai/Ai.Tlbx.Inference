@@ -4,6 +4,7 @@ using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Ai.Tlbx.Inference.Json;
 
 namespace Ai.Tlbx.Inference.Providers;
 
@@ -36,8 +37,9 @@ internal sealed class GoogleProvider : IProvider
 
         _context.Log?.Invoke(InferenceLogLevel.Debug, $"Request to {url}");
 
-        using var httpRequest = await CreateHttpRequestAsync(jsonBytes, url, ct).ConfigureAwait(false);
-        using var response = await _context.HttpClient.SendAsync(httpRequest, ct).ConfigureAwait(false);
+        using var response = await _context.SendAsync(
+            token => CreateHttpRequestAsync(jsonBytes, url, token),
+            ct).ConfigureAwait(false);
 
         if (!response.IsSuccessStatusCode)
         {
@@ -58,6 +60,9 @@ internal sealed class GoogleProvider : IProvider
         if (root.TryGetProperty("candidates", out var candidates) && candidates.GetArrayLength() > 0)
         {
             var candidate = candidates[0];
+            var stopReason = candidate.TryGetProperty("finishReason", out var finishEl)
+                ? finishEl.GetString()
+                : null;
             if (candidate.TryGetProperty("content", out var content) &&
                 content.TryGetProperty("parts", out var parts))
             {
@@ -92,8 +97,19 @@ internal sealed class GoogleProvider : IProvider
         {
             Content = contentBuilder.ToString(),
             Usage = usage,
-            StopReason = null,
+            EndpointFamily = ModelEndpointFamily.GoogleGenerateContent,
+            StopReason = root.TryGetProperty("candidates", out var rootCandidates) && rootCandidates.GetArrayLength() > 0 &&
+                         rootCandidates[0].TryGetProperty("finishReason", out var stopEl)
+                ? stopEl.GetString()
+                : null,
             ToolCalls = toolCalls,
+            DiagnosticNote = BuildDiagnosticNote(
+                contentBuilder.ToString(),
+                root.TryGetProperty("candidates", out var candidatesForNote) && candidatesForNote.GetArrayLength() > 0 &&
+                candidatesForNote[0].TryGetProperty("finishReason", out var stopForNote)
+                    ? stopForNote.GetString()
+                    : null,
+                usage),
         };
     }
 
@@ -108,9 +124,8 @@ internal sealed class GoogleProvider : IProvider
 
         _context.Log?.Invoke(InferenceLogLevel.Debug, $"Stream request to {url}");
 
-        using var httpRequest = await CreateHttpRequestAsync(jsonBytes, url, ct).ConfigureAwait(false);
-        using var response = await _context.HttpClient.SendAsync(
-            httpRequest,
+        using var response = await _context.SendAsync(
+            token => CreateHttpRequestAsync(jsonBytes, url, token),
             HttpCompletionOption.ResponseHeadersRead,
             ct).ConfigureAwait(false);
 
@@ -196,8 +211,9 @@ internal sealed class GoogleProvider : IProvider
         var jsonBytes = SerializeToUtf8Bytes(body);
         var url = BuildUrl(request.ModelApiName, "embedContent");
 
-        using var httpRequest = await CreateHttpRequestAsync(jsonBytes, url, ct).ConfigureAwait(false);
-        using var response = await _context.HttpClient.SendAsync(httpRequest, ct).ConfigureAwait(false);
+        using var response = await _context.SendAsync(
+            token => CreateHttpRequestAsync(jsonBytes, url, token),
+            ct).ConfigureAwait(false);
 
         if (!response.IsSuccessStatusCode)
         {
@@ -209,12 +225,12 @@ internal sealed class GoogleProvider : IProvider
         }
 
         using var responseStream = await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
-        using var doc = await JsonDocument.ParseAsync(responseStream, cancellationToken: ct).ConfigureAwait(false);
-        var embedding = ParseEmbeddingValues(doc.RootElement.GetProperty("embedding").GetProperty("values"));
+        var dto = await InferenceJson.DeserializeAsync(responseStream, InferenceJsonContext.Default.GoogleEmbeddingResponseDto, ct).ConfigureAwait(false)
+            ?? throw new JsonException("Google embedding response was empty.");
 
         return new ProviderEmbeddingResponse
         {
-            Embedding = embedding,
+            Embedding = dto.Embedding.Values,
             Usage = new TokenUsage(),
         };
     }
@@ -247,8 +263,9 @@ internal sealed class GoogleProvider : IProvider
         var jsonBytes = SerializeToUtf8Bytes(body);
         var url = BuildUrl(request.ModelApiName, "batchEmbedContents");
 
-        using var httpRequest = await CreateHttpRequestAsync(jsonBytes, url, ct).ConfigureAwait(false);
-        using var response = await _context.HttpClient.SendAsync(httpRequest, ct).ConfigureAwait(false);
+        using var response = await _context.SendAsync(
+            token => CreateHttpRequestAsync(jsonBytes, url, token),
+            ct).ConfigureAwait(false);
 
         if (!response.IsSuccessStatusCode)
         {
@@ -260,13 +277,12 @@ internal sealed class GoogleProvider : IProvider
         }
 
         using var responseStream = await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
-        using var doc = await JsonDocument.ParseAsync(responseStream, cancellationToken: ct).ConfigureAwait(false);
-        var embeddingsArray = doc.RootElement.GetProperty("embeddings");
-        var embeddings = new List<ReadOnlyMemory<float>>(embeddingsArray.GetArrayLength());
-
-        foreach (var item in embeddingsArray.EnumerateArray())
+        var dto = await InferenceJson.DeserializeAsync(responseStream, InferenceJsonContext.Default.GoogleBatchEmbeddingResponseDto, ct).ConfigureAwait(false)
+            ?? throw new JsonException("Google batch embedding response was empty.");
+        var embeddings = new ReadOnlyMemory<float>[dto.Embeddings.Length];
+        for (var i = 0; i < dto.Embeddings.Length; i++)
         {
-            embeddings.Add(ParseEmbeddingValues(item.GetProperty("values")));
+            embeddings[i] = dto.Embeddings[i].Values;
         }
 
         return new ProviderBatchEmbeddingResponse
@@ -293,8 +309,9 @@ internal sealed class GoogleProvider : IProvider
         var jsonBytes = SerializeToUtf8Bytes(body);
         var url = BuildUrl("gemini-3-pro-image-preview", "generateContent");
 
-        using var httpRequest = await CreateHttpRequestAsync(jsonBytes, url, ct).ConfigureAwait(false);
-        using var response = await _context.HttpClient.SendAsync(httpRequest, ct).ConfigureAwait(false);
+        using var response = await _context.SendAsync(
+            token => CreateHttpRequestAsync(jsonBytes, url, token),
+            ct).ConfigureAwait(false);
 
         if (!response.IsSuccessStatusCode)
         {
@@ -306,14 +323,10 @@ internal sealed class GoogleProvider : IProvider
         }
 
         using var responseStream = await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
-        using var doc = await JsonDocument.ParseAsync(responseStream, cancellationToken: ct).ConfigureAwait(false);
-        var inlineData = doc.RootElement
-            .GetProperty("candidates")[0]
-            .GetProperty("content")
-            .GetProperty("parts")[0]
-            .GetProperty("inline_data")
-            .GetProperty("data")
-            .GetString()!;
+        var dto = await InferenceJson.DeserializeAsync(responseStream, InferenceJsonContext.Default.GoogleImageGenerationResponseDto, ct).ConfigureAwait(false)
+            ?? throw new JsonException("Google image generation response was empty.");
+        var inlineData = dto.Candidates[0].Content.Parts[0].InlineData?.Data
+            ?? throw new InvalidOperationException("Google image generation response did not include image data.");
 
         return Convert.FromBase64String(inlineData);
     }
@@ -584,5 +597,17 @@ internal sealed class GoogleProvider : IProvider
             arr[i++] = val.GetSingle();
         }
         return arr;
+    }
+
+    private static string? BuildDiagnosticNote(string content, string? stopReason, TokenUsage usage)
+    {
+        if (string.IsNullOrWhiteSpace(content) &&
+            string.Equals(stopReason, "MAX_TOKENS", StringComparison.OrdinalIgnoreCase) &&
+            usage.ThinkingTokens > 0)
+        {
+            return "Google stopped at the output token limit after spending tokens on thinking before emitting visible text.";
+        }
+
+        return null;
     }
 }

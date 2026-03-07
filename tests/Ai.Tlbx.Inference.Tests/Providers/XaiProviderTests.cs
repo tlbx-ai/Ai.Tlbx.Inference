@@ -142,6 +142,81 @@ public sealed class XaiProviderTests
                 CancellationToken.None));
     }
 
+    [Fact]
+    public async Task CompleteAsync_WithAttachment_UsesAssistantsPurposeForUpload()
+    {
+        string? uploadBody = null;
+        var handler = new MockHttpHandler(async req =>
+        {
+            var body = req.Content is null ? null : await req.Content.ReadAsStringAsync();
+
+            if (req.RequestUri!.AbsolutePath == "/v1/files" && req.Method == HttpMethod.Post)
+            {
+                uploadBody = body;
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("""{"id":"file_xai"}""", System.Text.Encoding.UTF8, "application/json"),
+                };
+            }
+
+            if (req.RequestUri!.AbsolutePath == "/v1/responses" && req.Method == HttpMethod.Post)
+            {
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("""
+                    {
+                        "status": "completed",
+                        "output": [{
+                            "type": "message",
+                            "content": [{ "type": "output_text", "text": "done" }]
+                        }],
+                        "usage": { "input_tokens": 10, "output_tokens": 2 }
+                    }
+                    """, System.Text.Encoding.UTF8, "application/json"),
+                };
+            }
+
+            if (req.RequestUri!.AbsolutePath == "/v1/files/file_xai" && req.Method == HttpMethod.Delete)
+            {
+                return new HttpResponseMessage(HttpStatusCode.OK);
+            }
+
+            throw new InvalidOperationException($"Unexpected request: {req.Method} {req.RequestUri}");
+        });
+
+        var provider = new XaiProvider(new ProviderRequestContext
+        {
+            HttpClient = new HttpClient(handler),
+            BaseUrl = "https://api.x.ai",
+            ApiKey = "test",
+        });
+
+        await provider.CompleteAsync(new ProviderRequest
+        {
+            ModelApiName = "grok-4",
+            Messages =
+            [
+                new ChatMessage
+                {
+                    Role = ChatRole.User,
+                    Content = "Read the attachment",
+                    Attachments =
+                    [
+                        new DocumentAttachment
+                        {
+                            FileName = "notes.txt",
+                            MimeType = "text/plain",
+                            Content = System.Text.Encoding.UTF8.GetBytes("Status: GREEN"),
+                        }
+                    ],
+                }
+            ],
+        }, CancellationToken.None);
+
+        Assert.NotNull(uploadBody);
+        Assert.Contains("assistants", uploadBody!, StringComparison.Ordinal);
+    }
+
     private static XaiProvider CreateProvider(string responseJson)
     {
         var handler = new MockHttpHandler(async _ =>

@@ -1,9 +1,12 @@
 using System.Buffers;
+using System.Net;
 using System.Net.Http.Headers;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Ai.Tlbx.Inference.Json;
 
 namespace Ai.Tlbx.Inference.Providers;
 
@@ -17,16 +20,23 @@ internal abstract class OpenAiCompatibleProvider : IProvider
     }
 
     protected abstract string MapReasoningEffort(int thinkingBudget);
+    protected virtual string GetFileUploadPurpose() => "user_data";
 
     public async Task<ProviderResponse> CompleteAsync(ProviderRequest request, CancellationToken ct)
     {
+        if (UseResponsesApiForRequest(request))
+        {
+            return await CompleteWithResponsesApiAsync(request, ct).ConfigureAwait(false);
+        }
+
         var body = BuildRequestBody(request, stream: false);
         var jsonBytes = SerializeToUtf8Bytes(body);
 
         _context.Log?.Invoke(InferenceLogLevel.Debug, $"Request to {_context.BaseUrl}/v1/chat/completions");
 
-        using var httpRequest = CreateHttpRequest(jsonBytes, "/v1/chat/completions");
-        using var response = await _context.HttpClient.SendAsync(httpRequest, ct).ConfigureAwait(false);
+        using var response = await _context.SendAsync(
+            () => CreateHttpRequest(jsonBytes, "/v1/chat/completions"),
+            ct).ConfigureAwait(false);
 
         if (!response.IsSuccessStatusCode)
         {
@@ -74,16 +84,112 @@ internal abstract class OpenAiCompatibleProvider : IProvider
         {
             Content = content,
             Usage = usage,
+            EndpointFamily = ModelEndpointFamily.ChatCompletions,
             StopReason = stopReason,
             ToolCalls = toolCalls,
+            DiagnosticNote = BuildChatDiagnosticNote(content, stopReason, usage),
         };
+    }
+
+    private async Task<ProviderResponse> CompleteWithResponsesApiAsync(ProviderRequest request, CancellationToken ct)
+    {
+        var uploadedFileIds = await UploadAttachmentsAsync(request, ct).ConfigureAwait(false);
+
+        try
+        {
+            var body = BuildResponsesRequestBody(request, stream: false, uploadedFileIds);
+            var jsonBytes = SerializeToUtf8Bytes(body);
+
+            _context.Log?.Invoke(InferenceLogLevel.Debug, $"Request to {_context.BaseUrl}/v1/responses");
+
+            using var response = await _context.SendAsync(
+                () => CreateHttpRequest(jsonBytes, "/v1/responses"),
+                ct).ConfigureAwait(false);
+
+            if (!response.IsSuccessStatusCode)
+            {
+                var errorBody = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+                throw new HttpRequestException(
+                    $"API request failed with status {response.StatusCode}: {errorBody}",
+                    null,
+                    response.StatusCode);
+            }
+
+            using var responseStream = await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
+            using var doc = await JsonDocument.ParseAsync(responseStream, cancellationToken: ct).ConfigureAwait(false);
+            var root = doc.RootElement;
+
+            var contentBuilder = new StringBuilder();
+            List<ToolCallRequest>? toolCalls = null;
+
+            if (root.TryGetProperty("output", out var output))
+            {
+                foreach (var item in output.EnumerateArray())
+                {
+                    if (!item.TryGetProperty("type", out var typeEl))
+                    {
+                        continue;
+                    }
+
+                    switch (typeEl.GetString())
+                    {
+                        case "message":
+                            if (item.TryGetProperty("content", out var contentItems))
+                            {
+                                foreach (var contentItem in contentItems.EnumerateArray())
+                                {
+                                    if (contentItem.TryGetProperty("type", out var contentType) &&
+                                        contentType.GetString() == "output_text" &&
+                                        contentItem.TryGetProperty("text", out var textEl))
+                                    {
+                                        contentBuilder.Append(textEl.GetString());
+                                    }
+                                }
+                            }
+                            break;
+
+                        case "function_call":
+                            toolCalls ??= [];
+                            toolCalls.Add(new ToolCallRequest
+                            {
+                                Id = item.GetProperty("call_id").GetString() ?? item.GetProperty("id").GetString()!,
+                                Name = item.GetProperty("name").GetString()!,
+                                Arguments = item.TryGetProperty("arguments", out var argsEl) ? argsEl.GetString() ?? "" : "",
+                            });
+                            break;
+                    }
+                }
+            }
+
+            var stopReason = root.TryGetProperty("status", out var statusEl)
+                ? statusEl.GetString()
+                : null;
+
+            var usage = root.TryGetProperty("usage", out var usageEl)
+                ? ParseResponsesUsage(usageEl)
+                : new TokenUsage();
+
+            return new ProviderResponse
+            {
+                Content = contentBuilder.ToString(),
+                Usage = usage,
+                EndpointFamily = ModelEndpointFamily.Responses,
+                StopReason = stopReason,
+                ToolCalls = toolCalls,
+                DiagnosticNote = BuildResponsesDiagnosticNote(contentBuilder.ToString(), stopReason, usage),
+            };
+        }
+        finally
+        {
+            await DeleteUploadedFilesAsync(uploadedFileIds, ct).ConfigureAwait(false);
+        }
     }
 
     public IAsyncEnumerable<ProviderStreamEvent> StreamAsync(
         ProviderRequest request,
         CancellationToken ct)
     {
-        if (request.EnableWebSearch || request.EnableXSearch)
+        if (UseResponsesApiForRequest(request))
             return StreamResponsesApiAsync(request, ct);
 
         return StreamChatCompletionsAsync(request, ct);
@@ -93,91 +199,118 @@ internal abstract class OpenAiCompatibleProvider : IProvider
         ProviderRequest request,
         [EnumeratorCancellation] CancellationToken ct)
     {
-        var body = BuildResponsesRequestBody(request);
-        var jsonBytes = SerializeToUtf8Bytes(body);
+        var uploadedFileIds = await UploadAttachmentsAsync(request, ct).ConfigureAwait(false);
 
-        _context.Log?.Invoke(InferenceLogLevel.Debug, $"Stream request to {_context.BaseUrl}/v1/responses");
-
-        using var httpRequest = CreateHttpRequest(jsonBytes, "/v1/responses");
-        using var response = await _context.HttpClient.SendAsync(
-            httpRequest,
-            HttpCompletionOption.ResponseHeadersRead,
-            ct).ConfigureAwait(false);
-
-        if (!response.IsSuccessStatusCode)
+        try
         {
-            var errorBody = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
-            throw new HttpRequestException(
-                $"API stream request failed with status {response.StatusCode}: {errorBody}",
-                null,
-                response.StatusCode);
-        }
+            var body = BuildResponsesRequestBody(request, stream: true, uploadedFileIds);
+            var jsonBytes = SerializeToUtf8Bytes(body);
 
-        using var stream = await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
+            _context.Log?.Invoke(InferenceLogLevel.Debug, $"Stream request to {_context.BaseUrl}/v1/responses");
 
-        var toolCallArgs = new Dictionary<string, StringBuilder>();
+            using var response = await _context.SendAsync(
+                () => CreateHttpRequest(jsonBytes, "/v1/responses"),
+                HttpCompletionOption.ResponseHeadersRead,
+                ct).ConfigureAwait(false);
 
-        await foreach (var data in SseStreamParser.ParseAsync(stream, ct).ConfigureAwait(false))
-        {
-            using var doc = JsonDocument.Parse(data);
-            var root = doc.RootElement;
-
-            var eventType = root.TryGetProperty("type", out var typeEl) ? typeEl.GetString() : null;
-
-            switch (eventType)
+            if (!response.IsSuccessStatusCode)
             {
-                case "response.output_text.delta":
-                    var delta = root.GetProperty("delta").GetString();
-                    if (delta is not null)
-                        yield return new ProviderStreamEvent { TextDelta = delta };
-                    break;
-
-                case "response.function_call_arguments.delta":
-                    var callId = root.GetProperty("item_id").GetString()!;
-                    var argDelta = root.GetProperty("delta").GetString() ?? "";
-                    if (!toolCallArgs.TryGetValue(callId, out var sb))
-                    {
-                        sb = new StringBuilder();
-                        toolCallArgs[callId] = sb;
-                    }
-                    sb.Append(argDelta);
-                    break;
-
-                case "response.output_item.done":
-                    if (root.TryGetProperty("item", out var item) &&
-                        item.TryGetProperty("type", out var itemType) &&
-                        itemType.GetString() == "function_call")
-                    {
-                        var tcId = item.GetProperty("id").GetString()!;
-                        var tcName = item.GetProperty("name").GetString()!;
-                        var tcArgs = item.TryGetProperty("arguments", out var argsEl)
-                            ? argsEl.GetString() ?? ""
-                            : toolCallArgs.TryGetValue(tcId, out var accumulated) ? accumulated.ToString() : "";
-
-                        yield return new ProviderStreamEvent
-                        {
-                            ToolCall = new ToolCallRequest
-                            {
-                                Id = tcId,
-                                Name = tcName,
-                                Arguments = tcArgs,
-                            },
-                        };
-                        toolCallArgs.Remove(tcId);
-                    }
-                    break;
-
-                case "response.completed":
-                    if (root.TryGetProperty("response", out var resp) &&
-                        resp.TryGetProperty("usage", out var usageEl))
-                    {
-                        yield return new ProviderStreamEvent
-                        {
-                            Usage = ParseResponsesUsage(usageEl),
-                        };
-                    }
-                    break;
+                var errorBody = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+                throw new HttpRequestException(
+                    $"API stream request failed with status {response.StatusCode}: {errorBody}",
+                    null,
+                    response.StatusCode);
             }
+
+            using var stream = await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
+
+            var toolCallArgs = new Dictionary<string, StringBuilder>();
+            var emittedTextLength = 0;
+
+            await foreach (var data in SseStreamParser.ParseAsync(stream, ct).ConfigureAwait(false))
+            {
+                using var doc = JsonDocument.Parse(data);
+                var root = doc.RootElement;
+
+                var eventType = root.TryGetProperty("type", out var typeEl) ? typeEl.GetString() : null;
+
+                switch (eventType)
+                {
+                    case "response.output_text.delta":
+                        var delta = root.GetProperty("delta").GetString();
+                        if (delta is not null)
+                        {
+                            emittedTextLength += delta.Length;
+                            yield return new ProviderStreamEvent { TextDelta = delta };
+                        }
+                        break;
+
+                    case "response.function_call_arguments.delta":
+                        var callId = root.GetProperty("item_id").GetString()!;
+                        var argDelta = root.GetProperty("delta").GetString() ?? "";
+                        if (!toolCallArgs.TryGetValue(callId, out var sb))
+                        {
+                            sb = new StringBuilder();
+                            toolCallArgs[callId] = sb;
+                        }
+                        sb.Append(argDelta);
+                        break;
+
+                    case "response.output_item.done":
+                        if (root.TryGetProperty("item", out var item) &&
+                            item.TryGetProperty("type", out var itemType) &&
+                            itemType.GetString() == "function_call")
+                        {
+                            var tcId = item.GetProperty("id").GetString()!;
+                            var tcName = item.GetProperty("name").GetString()!;
+                            var tcArgs = item.TryGetProperty("arguments", out var argsEl)
+                                ? argsEl.GetString() ?? ""
+                                : toolCallArgs.TryGetValue(tcId, out var accumulated) ? accumulated.ToString() : "";
+
+                            yield return new ProviderStreamEvent
+                            {
+                                ToolCall = new ToolCallRequest
+                                {
+                                    Id = tcId,
+                                    Name = tcName,
+                                    Arguments = tcArgs,
+                                },
+                            };
+                            toolCallArgs.Remove(tcId);
+                        }
+                        break;
+
+                    case "response.completed":
+                        if (root.TryGetProperty("response", out var resp))
+                        {
+                            var completedText = ExtractResponsesOutputText(resp);
+                            if (completedText.Length > emittedTextLength)
+                            {
+                                var remainingText = completedText[emittedTextLength..];
+                                if (remainingText.Length > 0)
+                                {
+                                    yield return new ProviderStreamEvent
+                                    {
+                                        TextDelta = remainingText,
+                                    };
+                                }
+                            }
+
+                            if (resp.TryGetProperty("usage", out var usageEl))
+                            {
+                                yield return new ProviderStreamEvent
+                                {
+                                    Usage = ParseResponsesUsage(usageEl),
+                                };
+                            }
+                        }
+                        break;
+                }
+            }
+        }
+        finally
+        {
+            await DeleteUploadedFilesAsync(uploadedFileIds, ct).ConfigureAwait(false);
         }
     }
 
@@ -190,9 +323,8 @@ internal abstract class OpenAiCompatibleProvider : IProvider
 
         _context.Log?.Invoke(InferenceLogLevel.Debug, $"Stream request to {_context.BaseUrl}/v1/chat/completions");
 
-        using var httpRequest = CreateHttpRequest(jsonBytes, "/v1/chat/completions");
-        using var response = await _context.HttpClient.SendAsync(
-            httpRequest,
+        using var response = await _context.SendAsync(
+            () => CreateHttpRequest(jsonBytes, "/v1/chat/completions"),
             HttpCompletionOption.ResponseHeadersRead,
             ct).ConfigureAwait(false);
 
@@ -216,10 +348,13 @@ internal abstract class OpenAiCompatibleProvider : IProvider
 
             if (root.TryGetProperty("usage", out var usageEl))
             {
-                yield return new ProviderStreamEvent
+                if (usageEl.ValueKind == JsonValueKind.Object)
                 {
-                    Usage = ParseUsage(usageEl),
-                };
+                    yield return new ProviderStreamEvent
+                    {
+                        Usage = ParseUsage(usageEl),
+                    };
+                }
             }
 
             if (!root.TryGetProperty("choices", out var choices) || choices.GetArrayLength() == 0)
@@ -301,8 +436,9 @@ internal abstract class OpenAiCompatibleProvider : IProvider
         var body = BuildEmbeddingBody(request.ModelApiName, request.Input, request.Dimensions);
         var jsonBytes = SerializeToUtf8Bytes(body);
 
-        using var httpRequest = CreateHttpRequest(jsonBytes, "/v1/embeddings");
-        using var response = await _context.HttpClient.SendAsync(httpRequest, ct).ConfigureAwait(false);
+        using var response = await _context.SendAsync(
+            () => CreateHttpRequest(jsonBytes, "/v1/embeddings"),
+            ct).ConfigureAwait(false);
 
         if (!response.IsSuccessStatusCode)
         {
@@ -314,16 +450,13 @@ internal abstract class OpenAiCompatibleProvider : IProvider
         }
 
         using var responseStream = await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
-        using var doc = await JsonDocument.ParseAsync(responseStream, cancellationToken: ct).ConfigureAwait(false);
-        var root = doc.RootElement;
-
-        var embedding = ParseEmbeddingArray(root.GetProperty("data")[0].GetProperty("embedding"));
-        var promptTokens = root.GetProperty("usage").GetProperty("prompt_tokens").GetInt32();
+        var dto = await InferenceJson.DeserializeAsync(responseStream, InferenceJsonContext.Default.OpenAiEmbeddingResponseDto, ct).ConfigureAwait(false)
+            ?? throw new JsonException("OpenAI embedding response was empty.");
 
         return new ProviderEmbeddingResponse
         {
-            Embedding = embedding,
-            Usage = new TokenUsage { InputTokens = promptTokens },
+            Embedding = dto.Data[0].Embedding,
+            Usage = new TokenUsage { InputTokens = dto.Usage.PromptTokens },
         };
     }
 
@@ -334,8 +467,9 @@ internal abstract class OpenAiCompatibleProvider : IProvider
         var body = BuildBatchEmbeddingBody(request.ModelApiName, request.Inputs, request.Dimensions);
         var jsonBytes = SerializeToUtf8Bytes(body);
 
-        using var httpRequest = CreateHttpRequest(jsonBytes, "/v1/embeddings");
-        using var response = await _context.HttpClient.SendAsync(httpRequest, ct).ConfigureAwait(false);
+        using var response = await _context.SendAsync(
+            () => CreateHttpRequest(jsonBytes, "/v1/embeddings"),
+            ct).ConfigureAwait(false);
 
         if (!response.IsSuccessStatusCode)
         {
@@ -347,23 +481,18 @@ internal abstract class OpenAiCompatibleProvider : IProvider
         }
 
         using var responseStream = await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
-        using var doc = await JsonDocument.ParseAsync(responseStream, cancellationToken: ct).ConfigureAwait(false);
-        var root = doc.RootElement;
-
-        var dataArray = root.GetProperty("data");
-        var embeddings = new List<ReadOnlyMemory<float>>(dataArray.GetArrayLength());
-
-        foreach (var item in dataArray.EnumerateArray())
+        var dto = await InferenceJson.DeserializeAsync(responseStream, InferenceJsonContext.Default.OpenAiEmbeddingResponseDto, ct).ConfigureAwait(false)
+            ?? throw new JsonException("OpenAI batch embedding response was empty.");
+        var embeddings = new ReadOnlyMemory<float>[dto.Data.Length];
+        for (var i = 0; i < dto.Data.Length; i++)
         {
-            embeddings.Add(ParseEmbeddingArray(item.GetProperty("embedding")));
+            embeddings[i] = dto.Data[i].Embedding;
         }
-
-        var promptTokens = root.GetProperty("usage").GetProperty("prompt_tokens").GetInt32();
 
         return new ProviderBatchEmbeddingResponse
         {
             Embeddings = embeddings,
-            Usage = new TokenUsage { InputTokens = promptTokens },
+            Usage = new TokenUsage { InputTokens = dto.Usage.PromptTokens },
         };
     }
 
@@ -493,9 +622,10 @@ internal abstract class OpenAiCompatibleProvider : IProvider
         return body;
     }
 
-    private JsonObject BuildResponsesRequestBody(ProviderRequest request)
+    private JsonObject BuildResponsesRequestBody(ProviderRequest request, bool stream, IReadOnlyList<string> uploadedAttachmentIds)
     {
         var input = new JsonArray();
+        var attachmentIndex = 0;
 
         if (request.SystemMessage is not null)
             input.Add((JsonNode)new JsonObject { ["role"] = "developer", ["content"] = request.SystemMessage });
@@ -507,8 +637,44 @@ internal abstract class OpenAiCompatibleProvider : IProvider
                 case ChatRole.System:
                     input.Add((JsonNode)new JsonObject { ["role"] = "developer", ["content"] = msg.Content ?? "" });
                     break;
+                case ChatRole.User when msg.Attachments is { Count: > 0 }:
+                {
+                    var parts = new JsonArray();
+                    if (!string.IsNullOrEmpty(msg.Content))
+                    {
+                        parts.Add((JsonNode)new JsonObject { ["type"] = "input_text", ["text"] = msg.Content });
+                    }
+
+                    foreach (var attachment in msg.Attachments)
+                    {
+                        if (attachmentIndex >= uploadedAttachmentIds.Count)
+                        {
+                            throw new InvalidOperationException("Attachment upload state did not match request attachments.");
+                        }
+
+                        parts.Add((JsonNode)new JsonObject
+                        {
+                            ["type"] = "input_file",
+                            ["file_id"] = uploadedAttachmentIds[attachmentIndex++],
+                        });
+                    }
+
+                    input.Add((JsonNode)new JsonObject
+                    {
+                        ["role"] = "user",
+                        ["content"] = parts,
+                    });
+                    break;
+                }
                 case ChatRole.User:
-                    input.Add((JsonNode)new JsonObject { ["role"] = "user", ["content"] = msg.Content ?? "" });
+                    input.Add((JsonNode)new JsonObject
+                    {
+                        ["role"] = "user",
+                        ["content"] = new JsonArray
+                        {
+                            (JsonNode)new JsonObject { ["type"] = "input_text", ["text"] = msg.Content ?? "" }
+                        },
+                    });
                     break;
                 case ChatRole.Assistant when msg.ToolCalls is { Count: > 0 }:
                     foreach (var tc in msg.ToolCalls)
@@ -562,7 +728,7 @@ internal abstract class OpenAiCompatibleProvider : IProvider
         {
             ["model"] = request.ModelApiName,
             ["input"] = input,
-            ["stream"] = true,
+            ["stream"] = stream,
             ["store"] = false,
         };
 
@@ -579,6 +745,21 @@ internal abstract class OpenAiCompatibleProvider : IProvider
             body["top_p"] = request.TopP.Value;
 
         return body;
+    }
+
+    private static bool UseResponsesApiForRequest(ProviderRequest request)
+    {
+        if (request.EnableWebSearch || request.EnableXSearch)
+        {
+            return true;
+        }
+
+        if (request.Messages.Any(message => message.Attachments is { Count: > 0 }))
+        {
+            return true;
+        }
+
+        return request.PreferredEndpoint == ModelEndpointFamily.Responses;
     }
 
     private static TokenUsage ParseResponsesUsage(JsonElement usage)
@@ -609,6 +790,42 @@ internal abstract class OpenAiCompatibleProvider : IProvider
         };
     }
 
+    private static string ExtractResponsesOutputText(JsonElement response)
+    {
+        var contentBuilder = new StringBuilder();
+
+        if (!response.TryGetProperty("output", out var output) || output.ValueKind != JsonValueKind.Array)
+        {
+            return "";
+        }
+
+        foreach (var item in output.EnumerateArray())
+        {
+            if (!item.TryGetProperty("type", out var typeEl) ||
+                typeEl.ValueKind != JsonValueKind.String ||
+                typeEl.GetString() != "message" ||
+                !item.TryGetProperty("content", out var contentItems) ||
+                contentItems.ValueKind != JsonValueKind.Array)
+            {
+                continue;
+            }
+
+            foreach (var contentItem in contentItems.EnumerateArray())
+            {
+                if (contentItem.TryGetProperty("type", out var contentType) &&
+                    contentType.ValueKind == JsonValueKind.String &&
+                    contentType.GetString() == "output_text" &&
+                    contentItem.TryGetProperty("text", out var textEl) &&
+                    textEl.ValueKind == JsonValueKind.String)
+                {
+                    contentBuilder.Append(textEl.GetString());
+                }
+            }
+        }
+
+        return contentBuilder.ToString();
+    }
+
     private static ReadOnlyMemory<byte> SerializeToUtf8Bytes(JsonObject body)
     {
         var buffer = new ArrayBufferWriter<byte>();
@@ -616,6 +833,30 @@ internal abstract class OpenAiCompatibleProvider : IProvider
         body.WriteTo(writer);
         writer.Flush();
         return buffer.WrittenMemory;
+    }
+
+    private static string? BuildChatDiagnosticNote(string content, string? stopReason, TokenUsage usage)
+    {
+        if (string.IsNullOrWhiteSpace(content) &&
+            string.Equals(stopReason, "length", StringComparison.OrdinalIgnoreCase) &&
+            usage.ThinkingTokens > 0)
+        {
+            return "OpenAI stopped at the output token limit after spending the budget on reasoning.";
+        }
+
+        return null;
+    }
+
+    private static string? BuildResponsesDiagnosticNote(string content, string? stopReason, TokenUsage usage)
+    {
+        if (string.IsNullOrWhiteSpace(content) &&
+            string.Equals(stopReason, "incomplete", StringComparison.OrdinalIgnoreCase) &&
+            usage.ThinkingTokens > 0)
+        {
+            return "OpenAI Responses completed without visible text after spending output budget on reasoning.";
+        }
+
+        return null;
     }
 
     private HttpRequestMessage CreateHttpRequest(ReadOnlyMemory<byte> jsonBytes, string path)
@@ -629,13 +870,126 @@ internal abstract class OpenAiCompatibleProvider : IProvider
         return httpRequest;
     }
 
+    private async Task<List<string>> UploadAttachmentsAsync(ProviderRequest request, CancellationToken ct)
+    {
+        var uploadedIds = new List<string>();
+
+        foreach (var message in request.Messages)
+        {
+            if (message.Attachments is not { Count: > 0 })
+            {
+                continue;
+            }
+
+            foreach (var attachment in message.Attachments)
+            {
+                uploadedIds.Add(await UploadFileAsync(attachment, ct).ConfigureAwait(false));
+            }
+        }
+
+        return uploadedIds;
+    }
+
+    private async Task<string> UploadFileAsync(DocumentAttachment attachment, CancellationToken ct)
+    {
+        using var form = new MultipartFormDataContent();
+        form.Add(new StringContent(GetFileUploadPurpose()), "purpose");
+
+        using var fileContent = CreateByteArrayContent(attachment.Content);
+        fileContent.Headers.ContentType = MediaTypeHeaderValue.Parse(attachment.MimeType);
+        form.Add(fileContent, "file", attachment.FileName);
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, $"{_context.BaseUrl}/v1/files")
+        {
+            Content = form,
+        };
+        request.Headers.TryAddWithoutValidation("Authorization", $"Bearer {_context.ApiKey}");
+
+        using var response = await _context.SendAsync(
+            () =>
+            {
+                var request = new HttpRequestMessage(HttpMethod.Post, $"{_context.BaseUrl}/v1/files")
+                {
+                    Content = CreateUploadContent(attachment),
+                };
+                request.Headers.TryAddWithoutValidation("Authorization", $"Bearer {_context.ApiKey}");
+                return request;
+            },
+            ct).ConfigureAwait(false);
+        if (!response.IsSuccessStatusCode)
+        {
+            var errorBody = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+            throw new HttpRequestException(
+                $"File upload failed with status {response.StatusCode}: {errorBody}",
+                null,
+                response.StatusCode);
+        }
+
+        using var responseStream = await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
+        var dto = await InferenceJson.DeserializeAsync(responseStream, InferenceJsonContext.Default.OpenAiFileUploadResponseDto, ct).ConfigureAwait(false)
+            ?? throw new JsonException("OpenAI file upload response was empty.");
+        return dto.Id
+            ?? throw new InvalidOperationException("Upload response did not include a file id.");
+    }
+
+    private async Task DeleteUploadedFilesAsync(IReadOnlyList<string> uploadedFileIds, CancellationToken ct)
+    {
+        foreach (var fileId in uploadedFileIds)
+        {
+            try
+            {
+                using var response = await _context.SendAsync(
+                    () =>
+                    {
+                        var request = new HttpRequestMessage(HttpMethod.Delete, $"{_context.BaseUrl}/v1/files/{WebUtility.UrlEncode(fileId)}");
+                        request.Headers.TryAddWithoutValidation("Authorization", $"Bearer {_context.ApiKey}");
+                        return request;
+                    },
+                    ct).ConfigureAwait(false);
+                _ = response.IsSuccessStatusCode;
+            }
+            catch
+            {
+                // Best-effort cleanup only.
+            }
+        }
+    }
+
+    private static ByteArrayContent CreateByteArrayContent(ReadOnlyMemory<byte> content)
+    {
+        if (MemoryMarshal.TryGetArray(content, out var segment) && segment.Array is not null)
+        {
+            return new ByteArrayContent(segment.Array, segment.Offset, segment.Count);
+        }
+
+        return new ByteArrayContent(content.ToArray());
+    }
+
+    private MultipartFormDataContent CreateUploadContent(DocumentAttachment attachment)
+    {
+        var form = new MultipartFormDataContent();
+        form.Add(new StringContent(GetFileUploadPurpose()), "purpose");
+
+        var fileContent = CreateByteArrayContent(attachment.Content);
+        fileContent.Headers.ContentType = MediaTypeHeaderValue.Parse(attachment.MimeType);
+        form.Add(fileContent, "file", attachment.FileName);
+
+        return form;
+    }
+
     private static TokenUsage ParseUsage(JsonElement usage)
     {
+        if (usage.ValueKind != JsonValueKind.Object)
+        {
+            return new TokenUsage();
+        }
+
         var inputTokens = usage.TryGetProperty("prompt_tokens", out var pt) ? pt.GetInt32() : 0;
         var outputTokens = usage.TryGetProperty("completion_tokens", out var ct) ? ct.GetInt32() : 0;
 
         var cacheReadTokens = 0;
         if (usage.TryGetProperty("prompt_tokens_details", out var ptd) &&
+            ptd.ValueKind == JsonValueKind.Object &&
             ptd.TryGetProperty("cached_tokens", out var cached))
         {
             cacheReadTokens = cached.GetInt32();
@@ -643,6 +997,7 @@ internal abstract class OpenAiCompatibleProvider : IProvider
 
         var thinkingTokens = 0;
         if (usage.TryGetProperty("completion_tokens_details", out var ctd) &&
+            ctd.ValueKind == JsonValueKind.Object &&
             ctd.TryGetProperty("reasoning_tokens", out var reasoning))
         {
             thinkingTokens = reasoning.GetInt32();

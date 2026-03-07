@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Ai.Tlbx.Inference.Configuration;
 using Ai.Tlbx.Inference.Tests.Helpers;
 
@@ -42,7 +43,7 @@ public sealed class ToolLoopTests
             Messages = [new ChatMessage { Role = ChatRole.User, Content = "What's the weather in London?" }],
         };
 
-        var result = await client.CompleteWithToolsAsync<string>(
+        var result = await client.CompleteWithToolsAsync(
             request,
             _testTools,
             tc =>
@@ -84,7 +85,7 @@ public sealed class ToolLoopTests
             Messages = [new ChatMessage { Role = ChatRole.User, Content = "Compare weather" }],
         };
 
-        var result = await client.CompleteWithToolsAsync<string>(
+        var result = await client.CompleteWithToolsAsync(
             request,
             _testTools,
             tc => Task.FromResult(new ToolCallResult
@@ -116,7 +117,7 @@ public sealed class ToolLoopTests
         };
 
         await Assert.ThrowsAsync<InvalidOperationException>(
-            () => client.CompleteWithToolsAsync<string>(
+            () => client.CompleteWithToolsAsync(
                 request,
                 _testTools,
                 tc => Task.FromResult(new ToolCallResult { ToolCallId = tc.Id, Result = "ok" }),
@@ -148,7 +149,7 @@ public sealed class ToolLoopTests
             Messages = [new ChatMessage { Role = ChatRole.User, Content = "Do it" }],
         };
 
-        var result = await client.CompleteWithToolsAsync<string>(
+        var result = await client.CompleteWithToolsAsync(
             request,
             _testTools,
             tc => Task.FromResult(new ToolCallResult { ToolCallId = tc.Id, Result = "ok" }));
@@ -174,7 +175,7 @@ public sealed class ToolLoopTests
             Messages = [new ChatMessage { Role = ChatRole.User, Content = "Hello" }],
         };
 
-        var result = await client.CompleteWithToolsAsync<string>(
+        var result = await client.CompleteWithToolsAsync(
             request,
             _testTools,
             _ => throw new InvalidOperationException("Should not be called"));
@@ -216,13 +217,15 @@ public sealed class ToolLoopTests
         var request = new CompletionRequest
         {
             Model = AiModel.Gpt52,
+            JsonSchema = """{"type":"object","properties":{"city":{"type":"string"},"temperature":{"type":"integer"}},"required":["city","temperature"]}""",
             Messages = [new ChatMessage { Role = ChatRole.User, Content = "Weather?" }],
         };
 
-        var result = await client.CompleteWithToolsAsync<WeatherResult>(
+        var result = await client.CompleteWithToolsAsync(
             request,
             _testTools,
-            tc => Task.FromResult(new ToolCallResult { ToolCallId = tc.Id, Result = "ok" }));
+            tc => Task.FromResult(new ToolCallResult { ToolCallId = tc.Id, Result = "ok" }),
+            ToolLoopJsonContext.Default.WeatherResult);
 
         Assert.Equal("London", result.Content.City);
         Assert.Equal(22, result.Content.Temperature);
@@ -289,4 +292,10 @@ public sealed class ToolLoopTests
         public string City { get; set; } = "";
         public int Temperature { get; set; }
     }
+}
+
+[JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
+[JsonSerializable(typeof(ToolLoopTests.WeatherResult))]
+internal sealed partial class ToolLoopJsonContext : JsonSerializerContext
+{
 }

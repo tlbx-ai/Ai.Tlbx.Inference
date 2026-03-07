@@ -6,4 +6,5 @@ public sealed record CompletionResponse<T>
     public required TokenUsage Usage { get; init; }
     public required AiModel Model { get; init; }
     public string? StopReason { get; init; }
+    public CompletionDiagnostics? Diagnostics { get; init; }
 }

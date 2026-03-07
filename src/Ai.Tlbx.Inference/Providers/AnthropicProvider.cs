@@ -23,8 +23,9 @@ internal sealed class AnthropicProvider : IProvider
 
         _context.Log?.Invoke(InferenceLogLevel.Debug, $"Request to {_context.BaseUrl}/v1/messages");
 
-        using var httpRequest = CreateHttpRequest(jsonBytes);
-        using var response = await _context.HttpClient.SendAsync(httpRequest, ct).ConfigureAwait(false);
+        using var response = await _context.SendAsync(
+            () => CreateHttpRequest(jsonBytes),
+            ct).ConfigureAwait(false);
 
         if (!response.IsSuccessStatusCode)
         {
@@ -75,8 +76,10 @@ internal sealed class AnthropicProvider : IProvider
         {
             Content = contentBuilder.ToString(),
             Usage = usage,
+            EndpointFamily = ModelEndpointFamily.AnthropicMessages,
             StopReason = stopReason,
             ToolCalls = toolCalls,
+            DiagnosticNote = BuildDiagnosticNote(contentBuilder.ToString(), stopReason),
         };
     }
 
@@ -89,9 +92,8 @@ internal sealed class AnthropicProvider : IProvider
 
         _context.Log?.Invoke(InferenceLogLevel.Debug, $"Stream request to {_context.BaseUrl}/v1/messages");
 
-        using var httpRequest = CreateHttpRequest(jsonBytes);
-        using var response = await _context.HttpClient.SendAsync(
-            httpRequest,
+        using var response = await _context.SendAsync(
+            () => CreateHttpRequest(jsonBytes),
             HttpCompletionOption.ResponseHeadersRead,
             ct).ConfigureAwait(false);
 
@@ -479,5 +481,15 @@ internal sealed class AnthropicProvider : IProvider
             CacheReadTokens = cacheRead,
             CacheWriteTokens = cacheWrite,
         };
+    }
+
+    private static string? BuildDiagnosticNote(string content, string? stopReason)
+    {
+        if (string.IsNullOrWhiteSpace(content) && string.Equals(stopReason, "max_tokens", StringComparison.OrdinalIgnoreCase))
+        {
+            return "Anthropic stopped at the output token limit before returning visible text.";
+        }
+
+        return null;
     }
 }
