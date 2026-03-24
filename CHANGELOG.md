@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Fixed
+
+- Google image generation now targets `gemini-2.5-flash-image`, explicitly requests the `IMAGE` modality, and parses inline image data from current Gemini responses.
+
 ### Added
 
 - First-class `AiModelCatalog` registry with explicit endpoint and capability metadata.

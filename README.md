@@ -14,7 +14,7 @@ Trim-friendly .NET AI inference client for OpenAI, Anthropic, Google, and xAI, b
 - **Model registry** — first-class `AiModelCatalog` descriptors with endpoint/capability metadata
 - **Tool calling** — unified tool loop with streaming support, lives once in the facade
 - **Embeddings** — OpenAI and Google embedding models with batch support
-- **Image generation** — Google Gemini image generation
+- **Image generation** — Google Gemini image generation via `gemini-2.5-flash-image`
 - **Token metering** — `TokenUsage` on every response including cache and thinking tokens
 - **Resilience** — Polly v8 retry and timeout handling wired into provider HTTP execution
 - **Thinking budget** — universal mapping across all providers that support reasoning
@@ -233,6 +233,21 @@ var embedding = await client.EmbedAsync(new EmbeddingRequest
 
 Console.WriteLine($"Dimensions: {embedding.Embedding.Length}");
 ```
+
+### Image Generation
+
+```csharp
+var imageBytes = await client.GenerateImageAsync(new ImageGenerationRequest
+{
+    Prompt = "A product photo of a matte black teapot on a concrete counter"
+});
+
+await File.WriteAllBytesAsync("teapot.png", imageBytes);
+```
+
+Google image generation currently uses `gemini-2.5-flash-image` for both AI Studio and Vertex configurations.
+The library returns the first inline image bytes from Google's response. `Size` and `Quality` are reserved on the
+public request type but are not provider-mapped yet.
 
 ## Configuration
 
