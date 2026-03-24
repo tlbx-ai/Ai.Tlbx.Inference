@@ -10,6 +10,8 @@ namespace Ai.Tlbx.Inference.Providers;
 
 internal sealed class GoogleProvider : IProvider
 {
+    private const string ImageGenerationModel = "gemini-2.5-flash-image";
+
     private readonly ProviderRequestContext _context;
     private readonly GoogleTokenProvider? _tokenProvider;
     private readonly string? _projectId;
@@ -294,6 +296,11 @@ internal sealed class GoogleProvider : IProvider
 
     public async Task<byte[]> GenerateImageAsync(ProviderImageRequest request, CancellationToken ct)
     {
+        var generationConfig = new JsonObject
+        {
+            ["responseModalities"] = new JsonArray("IMAGE"),
+        };
+
         var body = new JsonObject
         {
             ["contents"] = new JsonArray
@@ -303,11 +310,11 @@ internal sealed class GoogleProvider : IProvider
                     ["parts"] = new JsonArray { (JsonNode)new JsonObject { ["text"] = request.Prompt } },
                 },
             },
-            ["generationConfig"] = new JsonObject { ["responseMimeType"] = "image/png" },
+            ["generationConfig"] = generationConfig,
         };
 
         var jsonBytes = SerializeToUtf8Bytes(body);
-        var url = BuildUrl("gemini-3-pro-image-preview", "generateContent");
+        var url = BuildUrl(ImageGenerationModel, "generateContent");
 
         using var response = await _context.SendAsync(
             token => CreateHttpRequestAsync(jsonBytes, url, token),
@@ -323,9 +330,8 @@ internal sealed class GoogleProvider : IProvider
         }
 
         using var responseStream = await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
-        var dto = await InferenceJson.DeserializeAsync(responseStream, InferenceJsonContext.Default.GoogleImageGenerationResponseDto, ct).ConfigureAwait(false)
-            ?? throw new JsonException("Google image generation response was empty.");
-        var inlineData = dto.Candidates[0].Content.Parts[0].InlineData?.Data
+        using var doc = await JsonDocument.ParseAsync(responseStream, cancellationToken: ct).ConfigureAwait(false);
+        var inlineData = FindInlineImageData(doc.RootElement)
             ?? throw new InvalidOperationException("Google image generation response did not include image data.");
 
         return Convert.FromBase64String(inlineData);
@@ -597,6 +603,51 @@ internal sealed class GoogleProvider : IProvider
             arr[i++] = val.GetSingle();
         }
         return arr;
+    }
+
+    private static string? FindInlineImageData(JsonElement root)
+    {
+        if (!root.TryGetProperty("candidates", out var candidates))
+        {
+            return null;
+        }
+
+        foreach (var candidate in candidates.EnumerateArray())
+        {
+            if (!candidate.TryGetProperty("content", out var content) ||
+                !content.TryGetProperty("parts", out var parts))
+            {
+                continue;
+            }
+
+            foreach (var part in parts.EnumerateArray())
+            {
+                if (TryGetInlineData(part, out var inlineData) &&
+                    inlineData.TryGetProperty("data", out var data) &&
+                    !string.IsNullOrWhiteSpace(data.GetString()))
+                {
+                    return data.GetString();
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private static bool TryGetInlineData(JsonElement part, out JsonElement inlineData)
+    {
+        if (part.TryGetProperty("inlineData", out inlineData))
+        {
+            return true;
+        }
+
+        if (part.TryGetProperty("inline_data", out inlineData))
+        {
+            return true;
+        }
+
+        inlineData = default;
+        return false;
     }
 
     private static string? BuildDiagnosticNote(string content, string? stopReason, TokenUsage usage)
