@@ -135,6 +135,50 @@ internal static class IntegrationScenarioHelper
         };
     }
 
+    public static async Task<ImageGenerationSmokeResult> ExecuteGoogleImageGenerationSmokeAsync(
+        AiInferenceClient client,
+        CancellationToken ct = default)
+    {
+        var imageBytes = await client.GenerateImageAsync(new ImageGenerationRequest
+        {
+            Prompt = "Create a simple flat illustration of a blue coffee mug on a white background.",
+        }, ct);
+
+        var artifactDirectory = Path.Combine(AppContext.BaseDirectory, "TestResults");
+        Directory.CreateDirectory(artifactDirectory);
+
+        var artifactPath = Path.Combine(
+            artifactDirectory,
+            $"google-image-smoke-{DateTime.UtcNow:yyyyMMdd-HHmmss}.png");
+
+        await File.WriteAllBytesAsync(artifactPath, imageBytes, ct);
+
+        return new ImageGenerationSmokeResult
+        {
+            ImageBytes = imageBytes,
+            ArtifactPath = artifactPath,
+        };
+    }
+
+    public static bool IsPng(IReadOnlyList<byte> bytes)
+    {
+        ReadOnlySpan<byte> pngSignature = [137, 80, 78, 71, 13, 10, 26, 10];
+        if (bytes.Count < pngSignature.Length)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < pngSignature.Length; i++)
+        {
+            if (bytes[i] != pngSignature[i])
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     private static async Task<List<string>> CollectStreamChunksAsync(AiInferenceClient client, CompletionRequest request, CancellationToken ct)
     {
         var chunks = new List<string>();
@@ -246,4 +290,10 @@ internal sealed class TestClient : IDisposable
     {
         _httpClient.Dispose();
     }
+}
+
+internal sealed record ImageGenerationSmokeResult
+{
+    public required byte[] ImageBytes { get; init; }
+    public required string ArtifactPath { get; init; }
 }
