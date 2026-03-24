@@ -268,6 +268,58 @@ public sealed class GoogleProviderTests
         Assert.Equal("Hello Gemini", string.Concat(chunks));
     }
 
+    [Fact]
+    public async Task GenerateImageAsync_SendsImageModalityAndParsesInlineData()
+    {
+        string? capturedBody = null;
+        HttpRequestMessage? capturedRequest = null;
+        var expectedBytes = "png-bytes"u8.ToArray();
+        var responseJson = $$"""
+        {
+            "candidates": [{
+                "content": {
+                    "parts": [
+                        { "text": "Generated image." },
+                        { "inlineData": { "data": "{{Convert.ToBase64String(expectedBytes)}}", "mimeType": "image/png" } }
+                    ]
+                }
+            }]
+        }
+        """;
+
+        var handler = new MockHttpHandler(async req =>
+        {
+            capturedRequest = req;
+            capturedBody = await req.Content!.ReadAsStringAsync();
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(responseJson, System.Text.Encoding.UTF8, "application/json"),
+            };
+        });
+
+        var provider = new GoogleProvider(new ProviderRequestContext
+        {
+            HttpClient = new HttpClient(handler),
+            BaseUrl = "https://generativelanguage.googleapis.com",
+            ApiKey = "test",
+        });
+
+        var bytes = await provider.GenerateImageAsync(new ProviderImageRequest
+        {
+            Prompt = "Generate a skyline",
+        }, CancellationToken.None);
+
+        Assert.Equal(expectedBytes, bytes);
+        Assert.NotNull(capturedRequest);
+        Assert.Contains("gemini-2.5-flash-image:generateContent", capturedRequest!.RequestUri!.ToString());
+        Assert.NotNull(capturedBody);
+        using var doc = JsonDocument.Parse(capturedBody!);
+        var generationConfig = doc.RootElement.GetProperty("generationConfig");
+        Assert.False(generationConfig.TryGetProperty("responseMimeType", out _));
+        var responseModalities = generationConfig.GetProperty("responseModalities");
+        Assert.Equal("IMAGE", responseModalities[0].GetString());
+    }
+
     private static GoogleProvider CreateProvider(string responseJson)
     {
         var handler = new MockHttpHandler(async _ =>
