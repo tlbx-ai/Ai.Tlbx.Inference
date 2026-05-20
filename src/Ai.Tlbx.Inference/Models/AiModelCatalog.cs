@@ -46,6 +46,12 @@ public static class AiModelCatalog
                 ModelEndpointFamily.AnthropicMessages,
                 supportsThinking: false, supportsChatCompletionsApi: false, supportsResponsesApi: false,
                 defaultSmokeMaxTokens: 128, retrySmokeMaxTokens: 256),
+            [AiModel.Gemini35Flash] = Create(
+                AiModel.Gemini35Flash, "gemini-3.5-flash", "Gemini 3.5 Flash", ProviderType.Google, 1048576,
+                ModelEndpointFamily.GoogleGenerateContent,
+                supportsThinking: true, supportsChatCompletionsApi: false, supportsResponsesApi: false,
+                defaultSmokeMaxTokens: 512, retrySmokeMaxTokens: 1024,
+                requiresReasoningBudgetHeadroom: true),
             [AiModel.Gemini3FlashPreview] = Create(
                 AiModel.Gemini3FlashPreview, "gemini-3-flash-preview", "Gemini 3 Flash Preview", ProviderType.Google, 1000000,
                 ModelEndpointFamily.GoogleGenerateContent,

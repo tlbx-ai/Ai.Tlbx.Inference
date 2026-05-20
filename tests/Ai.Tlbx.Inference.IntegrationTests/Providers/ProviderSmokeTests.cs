@@ -51,6 +51,17 @@ public sealed class ProviderSmokeTests
         });
     }
 
+    [RequiresEnvironmentFact("GOOGLE_API_KEY")]
+    public async Task Google_Gemini35Flash_SimplePrompt_ReturnsContent()
+    {
+        await IntegrationTestTimeout.ExecuteAsync(async ct =>
+        {
+            using var testClient = IntegrationScenarioHelper.CreateClient(ProviderType.Google);
+            var response = await IntegrationScenarioHelper.ExecuteSmokeRequestAsync(testClient.Client, AiModel.Gemini35Flash, ct);
+            Assert.False(string.IsNullOrWhiteSpace(response.Content));
+        });
+    }
+
     [RequiresEnvironmentTheory("XAI_API_KEY")]
     [MemberData(nameof(XaiModels))]
     public async Task Xai_SimplePrompt_ReturnsContent(AiModel model)

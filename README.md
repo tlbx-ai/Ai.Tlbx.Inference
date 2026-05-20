@@ -50,6 +50,7 @@ Trim-friendly .NET AI inference client for OpenAI, Anthropic, Google, and xAI, b
 ### Google
 | Model | Enum | Context |
 |-------|------|---------|
+| Gemini 3.5 Flash | `AiModel.Gemini35Flash` | 1M |
 | Gemini 3 Flash Preview | `AiModel.Gemini3FlashPreview` | 1M |
 | Gemini 3.1 Pro Preview | `AiModel.Gemini31ProPreview` | 1M |
 | Gemini 3.1 Flash-Lite Preview | `AiModel.Gemini31FlashLitePreview` | 1M |
@@ -144,6 +145,10 @@ var response = await client.CompleteAsync(new CompletionRequest
 
 Console.WriteLine($"{response.Content.City}: {response.Content.Temperature}°C, {response.Content.Condition}");
 ```
+
+`AiModel.Gemini35Flash` maps to Google's `gemini-3.5-flash` Gemini API model and supports text,
+PDF/document attachments, streaming, structured output, and function calling through the Google
+GenerateContent endpoint.
 
 ### Model Validation
 

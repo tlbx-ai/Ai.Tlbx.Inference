@@ -15,6 +15,7 @@ public enum AiModel
     ClaudeHaiku45,
 
     // Google
+    Gemini35Flash,
     Gemini3FlashPreview,
     Gemini31ProPreview,
     Gemini31FlashLitePreview,

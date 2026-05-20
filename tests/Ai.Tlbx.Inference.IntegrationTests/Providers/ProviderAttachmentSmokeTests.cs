@@ -48,6 +48,16 @@ public sealed class ProviderAttachmentSmokeTests
         });
     }
 
+    [RequiresEnvironmentFact("GOOGLE_API_KEY")]
+    public async Task Google_Gemini35Flash_Attachment_ReturnsExpectedAnswer()
+    {
+        await IntegrationTestTimeout.ExecuteAsync(async ct =>
+        {
+            using var testClient = IntegrationScenarioHelper.CreateClient(ProviderType.Google);
+            await AssertAttachmentAsync(testClient.Client, AiModel.Gemini35Flash, ct);
+        });
+    }
+
     [RequiresEnvironmentTheory("XAI_API_KEY")]
     [MemberData(nameof(XaiModels))]
     public async Task Xai_Attachment_ReturnsExpectedAnswer(AiModel model)
