@@ -81,12 +81,14 @@ internal sealed class GoogleProvider : IProvider
                         var args = fnCall.TryGetProperty("args", out var argsEl)
                             ? argsEl.GetRawText()
                             : "{}";
+                        var thoughtSignature = ExtractThoughtSignature(part, fnCall);
 
                         toolCalls.Add(new ToolCallRequest
                         {
                             Id = Guid.NewGuid().ToString("N"),
                             Name = name,
                             Arguments = args,
+                            ThoughtSignature = thoughtSignature,
                         });
                     }
                 }
@@ -169,6 +171,7 @@ internal sealed class GoogleProvider : IProvider
                             var args = fnCall.TryGetProperty("args", out var argsEl)
                                 ? argsEl.GetRawText()
                                 : "{}";
+                            var thoughtSignature = ExtractThoughtSignature(part, fnCall);
 
                             yield return new ProviderStreamEvent
                             {
@@ -177,6 +180,7 @@ internal sealed class GoogleProvider : IProvider
                                     Id = Guid.NewGuid().ToString("N"),
                                     Name = name,
                                     Arguments = args,
+                                    ThoughtSignature = thoughtSignature,
                                 },
                             };
                         }
@@ -398,14 +402,20 @@ internal sealed class GoogleProvider : IProvider
                     }
                     foreach (var tc in msg.ToolCalls)
                     {
-                        parts.Add((JsonNode)new JsonObject
+                        var part = new JsonObject
                         {
                             ["functionCall"] = new JsonObject
                             {
                                 ["name"] = tc.Name,
                                 ["args"] = JsonNode.Parse(tc.Arguments),
                             },
-                        });
+                        };
+                        if (!string.IsNullOrWhiteSpace(tc.ThoughtSignature))
+                        {
+                            part["thoughtSignature"] = tc.ThoughtSignature;
+                        }
+
+                        parts.Add((JsonNode)part);
                     }
                     contents.Add((JsonNode)new JsonObject { ["role"] = "model", ["parts"] = parts });
                     break;
@@ -648,6 +658,31 @@ internal sealed class GoogleProvider : IProvider
 
         inlineData = default;
         return false;
+    }
+
+    private static string? ExtractThoughtSignature(JsonElement part, JsonElement functionCall)
+    {
+        if (part.TryGetProperty("thoughtSignature", out var camelPart) && camelPart.ValueKind == JsonValueKind.String)
+        {
+            return camelPart.GetString();
+        }
+
+        if (part.TryGetProperty("thought_signature", out var snakePart) && snakePart.ValueKind == JsonValueKind.String)
+        {
+            return snakePart.GetString();
+        }
+
+        if (functionCall.TryGetProperty("thoughtSignature", out var camelCall) && camelCall.ValueKind == JsonValueKind.String)
+        {
+            return camelCall.GetString();
+        }
+
+        if (functionCall.TryGetProperty("thought_signature", out var snakeCall) && snakeCall.ValueKind == JsonValueKind.String)
+        {
+            return snakeCall.GetString();
+        }
+
+        return null;
     }
 
     private static string? BuildDiagnosticNote(string content, string? stopReason, TokenUsage usage)

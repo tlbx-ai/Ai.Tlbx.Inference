@@ -181,6 +181,80 @@ public sealed class GoogleProviderTests
     }
 
     [Fact]
+    public async Task CompleteAsync_ParsesToolCallThoughtSignature()
+    {
+        var json = """
+        {
+            "candidates": [{
+                "content": {
+                    "parts": [
+                        {
+                            "functionCall": { "name": "get_weather", "args": {"city": "Berlin"} },
+                            "thoughtSignature": "gemini-signature"
+                        }
+                    ]
+                }
+            }]
+        }
+        """;
+        var provider = CreateProvider(json);
+
+        var response = await provider.CompleteAsync(BuildSimpleRequest(), CancellationToken.None);
+
+        Assert.NotNull(response.ToolCalls);
+        var toolCall = Assert.Single(response.ToolCalls);
+        Assert.Equal("gemini-signature", toolCall.ThoughtSignature);
+    }
+
+    [Fact]
+    public async Task CompleteAsync_SendsToolCallThoughtSignatureBackToGemini()
+    {
+        string? capturedBody = null;
+        var handler = new MockHttpHandler(async req =>
+        {
+            capturedBody = await req.Content!.ReadAsStringAsync();
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(BuildGoogleResponse("Done"), System.Text.Encoding.UTF8, "application/json"),
+            };
+        });
+
+        var provider = new GoogleProvider(new ProviderRequestContext
+        {
+            HttpClient = new HttpClient(handler),
+            BaseUrl = "https://generativelanguage.googleapis.com",
+            ApiKey = "test",
+        });
+
+        await provider.CompleteAsync(new ProviderRequest
+        {
+            ModelApiName = "gemini-2.5-pro",
+            Messages =
+            [
+                new ChatMessage
+                {
+                    Role = ChatRole.Assistant,
+                    ToolCalls =
+                    [
+                        new ToolCallRequest
+                        {
+                            Id = "call-1",
+                            Name = "get_weather",
+                            Arguments = """{"city":"Berlin"}""",
+                            ThoughtSignature = "gemini-signature",
+                        }
+                    ],
+                },
+            ],
+        }, CancellationToken.None);
+
+        Assert.NotNull(capturedBody);
+        using var doc = JsonDocument.Parse(capturedBody!);
+        var part = doc.RootElement.GetProperty("contents")[0].GetProperty("parts")[0];
+        Assert.Equal("gemini-signature", part.GetProperty("thoughtSignature").GetString());
+    }
+
+    [Fact]
     public async Task CompleteAsync_WithTextAttachment_SendsInlineData()
     {
         string? capturedBody = null;

@@ -435,6 +435,7 @@ public sealed class AiInferenceClient : IAiInferenceClient
             Id = toolCall.Id,
             Name = toolCall.Name,
             Arguments = toolCall.Arguments,
+            ThoughtSignature = toolCall.ThoughtSignature,
         };
     }
 
