@@ -72,6 +72,7 @@ internal sealed record ProviderBatchEmbeddingResponse
 
 internal sealed record ProviderImageRequest
 {
+    public required string ModelApiName { get; init; }
     public required string Prompt { get; init; }
     public string? Size { get; init; }
     public string? Quality { get; init; }

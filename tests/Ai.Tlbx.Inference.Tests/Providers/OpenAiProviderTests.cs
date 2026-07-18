@@ -7,6 +7,118 @@ namespace Ai.Tlbx.Inference.Tests.Providers;
 
 public sealed class OpenAiProviderTests
 {
+    [Fact]
+    public async Task GenerateImageAsync_SendsImageApiRequestAndDecodesPngBytes()
+    {
+        HttpRequestMessage? capturedRequest = null;
+        string? capturedBody = null;
+        var expectedBytes = new byte[] { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A };
+        var responseJson = $$"""
+        {
+            "data": [
+                { "b64_json": "{{Convert.ToBase64String(expectedBytes)}}" }
+            ]
+        }
+        """;
+
+        var handler = new MockHttpHandler(async request =>
+        {
+            capturedRequest = request;
+            capturedBody = await request.Content!.ReadAsStringAsync();
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(responseJson, System.Text.Encoding.UTF8, "application/json"),
+            };
+        });
+        var provider = new OpenAiProvider(new ProviderRequestContext
+        {
+            HttpClient = new HttpClient(handler),
+            BaseUrl = "https://api.openai.com",
+            ApiKey = "test-image-key",
+        });
+
+        var bytes = await provider.GenerateImageAsync(new ProviderImageRequest
+        {
+            ModelApiName = "gpt-image-2",
+            Prompt = "A clear schoolbook diagram",
+            Size = "1536x1024",
+            Quality = "high",
+        }, CancellationToken.None);
+
+        Assert.Equal(expectedBytes, bytes);
+        Assert.NotNull(capturedRequest);
+        Assert.Equal("https://api.openai.com/v1/images/generations", capturedRequest!.RequestUri?.ToString());
+        Assert.Equal("Bearer", capturedRequest.Headers.Authorization?.Scheme);
+        Assert.Equal("test-image-key", capturedRequest.Headers.Authorization?.Parameter);
+        Assert.NotNull(capturedBody);
+        using var document = JsonDocument.Parse(capturedBody!);
+        Assert.Equal("gpt-image-2", document.RootElement.GetProperty("model").GetString());
+        Assert.Equal("A clear schoolbook diagram", document.RootElement.GetProperty("prompt").GetString());
+        Assert.Equal("1536x1024", document.RootElement.GetProperty("size").GetString());
+        Assert.Equal("high", document.RootElement.GetProperty("quality").GetString());
+        Assert.Equal("png", document.RootElement.GetProperty("output_format").GetString());
+        Assert.Equal(1, document.RootElement.GetProperty("n").GetInt32());
+    }
+
+    [Fact]
+    public async Task GenerateImageAsync_ThrowsUsefulErrorForRejectedRequest()
+    {
+        var handler = new MockHttpHandler(async _ =>
+        {
+            await Task.CompletedTask;
+            return new HttpResponseMessage(HttpStatusCode.BadRequest)
+            {
+                Content = new StringContent("""{"error":{"code":"moderation_blocked"}}""", System.Text.Encoding.UTF8, "application/json"),
+            };
+        });
+        var provider = new OpenAiProvider(new ProviderRequestContext
+        {
+            HttpClient = new HttpClient(handler),
+            BaseUrl = "https://api.openai.com",
+            ApiKey = "test",
+        });
+
+        var exception = await Assert.ThrowsAsync<HttpRequestException>(() => provider.GenerateImageAsync(
+            new ProviderImageRequest
+            {
+                ModelApiName = "gpt-image-2",
+                Prompt = "blocked",
+            },
+            CancellationToken.None));
+
+        Assert.Equal(HttpStatusCode.BadRequest, exception.StatusCode);
+        Assert.Contains("moderation_blocked", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task GenerateImageAsync_RejectsResponseWithoutImageData()
+    {
+        var handler = new MockHttpHandler(async _ =>
+        {
+            await Task.CompletedTask;
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("""{"data":[]}""", System.Text.Encoding.UTF8, "application/json"),
+            };
+        });
+        var provider = new OpenAiProvider(new ProviderRequestContext
+        {
+            HttpClient = new HttpClient(handler),
+            BaseUrl = "https://api.openai.com",
+            ApiKey = "test",
+        });
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => provider.GenerateImageAsync(
+            new ProviderImageRequest
+            {
+                ModelApiName = "gpt-image-2",
+                Prompt = "missing image",
+            },
+            CancellationToken.None));
+
+        Assert.Equal("OpenAI image generation response did not include image data.", exception.Message);
+    }
+
     private static (OpenAiProvider Provider, HttpRequestMessage? CapturedRequest) CreateProvider(
         string responseJson,
         HttpStatusCode statusCode = HttpStatusCode.OK)

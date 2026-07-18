@@ -39,6 +39,7 @@ var batchEmbeddingRequest = new BatchEmbeddingRequest
 
 var imageRequest = new ImageGenerationRequest
 {
+    Model = ImageGenerationModel.GptImage2,
     Prompt = "A sunset",
 };
 

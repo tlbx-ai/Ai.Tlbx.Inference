@@ -10,7 +10,7 @@
     <RepositoryType>git</RepositoryType>
     <PackageTags>ai;inference;openai;anthropic;google;gemini;xai;grok;llm;embeddings;tool-calling;streaming;attachments;aot;trimming</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>
-    <PackageReleaseNotes>2.1.1: add Gemini 3.5 Flash model catalog support with targeted Google text and document attachment smoke coverage.</PackageReleaseNotes>
+    <PackageReleaseNotes>2.1.4: add typed image-model routing and OpenAI Image API generation, including GPT Image 2, while preserving Gemini image generation as the default.</PackageReleaseNotes>
     <PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <NoWarn>CS1591</NoWarn>

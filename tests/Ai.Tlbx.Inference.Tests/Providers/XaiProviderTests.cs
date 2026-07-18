@@ -138,7 +138,7 @@ public sealed class XaiProviderTests
         var provider = CreateProvider("{}");
         await Assert.ThrowsAsync<NotSupportedException>(
             () => provider.GenerateImageAsync(
-                new ProviderImageRequest { Prompt = "test" },
+                new ProviderImageRequest { ModelApiName = "gpt-image-2", Prompt = "test" },
                 CancellationToken.None));
     }
 

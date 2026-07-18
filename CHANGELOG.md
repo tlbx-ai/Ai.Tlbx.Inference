@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Added
+
+- Typed image-model routing through `ImageGenerationModel`, including OpenAI GPT Image 2, GPT Image 1.5, GPT Image 1, and GPT Image 1 Mini.
+- OpenAI Image API generation with explicit PNG output plus size and quality mapping.
+
 ### Fixed
 
 - Google image generation now targets `gemini-2.5-flash-image`, explicitly requests the `IMAGE` modality, and parses inline image data from current Gemini responses.

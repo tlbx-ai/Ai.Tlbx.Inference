@@ -12,7 +12,7 @@ namespace Ai.Tlbx.Inference.Providers;
 
 internal abstract class OpenAiCompatibleProvider : IProvider
 {
-    private readonly ProviderRequestContext _context;
+    protected readonly ProviderRequestContext _context;
 
     protected OpenAiCompatibleProvider(ProviderRequestContext context)
     {
@@ -826,7 +826,7 @@ internal abstract class OpenAiCompatibleProvider : IProvider
         return contentBuilder.ToString();
     }
 
-    private static ReadOnlyMemory<byte> SerializeToUtf8Bytes(JsonObject body)
+    protected static ReadOnlyMemory<byte> SerializeToUtf8Bytes(JsonObject body)
     {
         var buffer = new ArrayBufferWriter<byte>();
         using var writer = new Utf8JsonWriter(buffer);
@@ -859,7 +859,7 @@ internal abstract class OpenAiCompatibleProvider : IProvider
         return null;
     }
 
-    private HttpRequestMessage CreateHttpRequest(ReadOnlyMemory<byte> jsonBytes, string path)
+    protected HttpRequestMessage CreateHttpRequest(ReadOnlyMemory<byte> jsonBytes, string path)
     {
         var httpRequest = new HttpRequestMessage(HttpMethod.Post, $"{_context.BaseUrl}{path}")
         {

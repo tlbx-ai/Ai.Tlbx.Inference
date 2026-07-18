@@ -359,9 +359,12 @@ public sealed class AiInferenceClient : IAiInferenceClient
 
     public async Task<byte[]> GenerateImageAsync(ImageGenerationRequest request, CancellationToken ct = default)
     {
-        var provider = GetProvider(ProviderType.Google);
+        ArgumentNullException.ThrowIfNull(request);
+
+        var provider = GetProvider(request.Model.GetProvider());
         var providerRequest = new ProviderImageRequest
         {
+            ModelApiName = request.Model.ToApiName(),
             Prompt = request.Prompt,
             Size = request.Size,
             Quality = request.Quality,

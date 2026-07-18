@@ -380,6 +380,7 @@ public sealed class GoogleProviderTests
 
         var bytes = await provider.GenerateImageAsync(new ProviderImageRequest
         {
+            ModelApiName = "gemini-2.5-flash-image",
             Prompt = "Generate a skyline",
         }, CancellationToken.None);
 

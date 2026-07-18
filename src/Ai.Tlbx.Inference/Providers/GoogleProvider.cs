@@ -10,8 +10,6 @@ namespace Ai.Tlbx.Inference.Providers;
 
 internal sealed class GoogleProvider : IProvider
 {
-    private const string ImageGenerationModel = "gemini-2.5-flash-image";
-
     private readonly ProviderRequestContext _context;
     private readonly GoogleTokenProvider? _tokenProvider;
     private readonly string? _projectId;
@@ -318,7 +316,7 @@ internal sealed class GoogleProvider : IProvider
         };
 
         var jsonBytes = SerializeToUtf8Bytes(body);
-        var url = BuildUrl(ImageGenerationModel, "generateContent");
+        var url = BuildUrl(request.ModelApiName, "generateContent");
 
         using var response = await _context.SendAsync(
             token => CreateHttpRequestAsync(jsonBytes, url, token),

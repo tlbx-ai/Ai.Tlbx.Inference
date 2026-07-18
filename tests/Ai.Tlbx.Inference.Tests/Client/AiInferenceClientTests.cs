@@ -122,6 +122,67 @@ public sealed class AiInferenceClientTests
     }
 
     [Fact]
+    public async Task GenerateImageAsync_RoutesGptImageModelToOpenAi()
+    {
+        HttpRequestMessage? captured = null;
+        var expectedBytes = "openai-image"u8.ToArray();
+        var handler = new MockHttpHandler(async request =>
+        {
+            captured = request;
+            await Task.CompletedTask;
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    $"{{\"data\":[{{\"b64_json\":\"{Convert.ToBase64String(expectedBytes)}\"}}]}}",
+                    System.Text.Encoding.UTF8,
+                    "application/json"),
+            };
+        });
+        var client = CreateClient(handler, options => options.AddOpenAi("key"));
+
+        var bytes = await client.GenerateImageAsync(new ImageGenerationRequest
+        {
+            Model = ImageGenerationModel.GptImage2,
+            Prompt = "schoolbook image",
+        });
+
+        Assert.Equal(expectedBytes, bytes);
+        Assert.NotNull(captured);
+        Assert.Equal("api.openai.com", captured!.RequestUri?.Host);
+        Assert.Equal("/v1/images/generations", captured.RequestUri?.AbsolutePath);
+    }
+
+    [Fact]
+    public async Task GenerateImageAsync_DefaultModelStillRoutesToGoogle()
+    {
+        HttpRequestMessage? captured = null;
+        var expectedBytes = "google-image"u8.ToArray();
+        var handler = new MockHttpHandler(async request =>
+        {
+            captured = request;
+            await Task.CompletedTask;
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    $"{{\"candidates\":[{{\"content\":{{\"parts\":[{{\"inlineData\":{{\"data\":\"{Convert.ToBase64String(expectedBytes)}\",\"mimeType\":\"image/png\"}}}}]}}}}]}}",
+                    System.Text.Encoding.UTF8,
+                    "application/json"),
+            };
+        });
+        var client = CreateClient(handler, options => options.AddGoogle("key"));
+
+        var bytes = await client.GenerateImageAsync(new ImageGenerationRequest
+        {
+            Prompt = "schoolbook image",
+        });
+
+        Assert.Equal(expectedBytes, bytes);
+        Assert.NotNull(captured);
+        Assert.Equal("generativelanguage.googleapis.com", captured!.RequestUri?.Host);
+        Assert.Contains("gemini-2.5-flash-image:generateContent", captured.RequestUri?.AbsoluteUri, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task CompleteAsync_Generic_DeserializesJson()
     {
         var json = """

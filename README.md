@@ -244,15 +244,19 @@ Console.WriteLine($"Dimensions: {embedding.Embedding.Length}");
 ```csharp
 var imageBytes = await client.GenerateImageAsync(new ImageGenerationRequest
 {
-    Prompt = "A product photo of a matte black teapot on a concrete counter"
+    Model = ImageGenerationModel.GptImage2,
+    Prompt = "A product photo of a matte black teapot on a concrete counter",
+    Size = "1536x1024",
+    Quality = "high"
 });
 
 await File.WriteAllBytesAsync("teapot.png", imageBytes);
 ```
 
-Google image generation currently uses `gemini-2.5-flash-image` for both AI Studio and Vertex configurations.
-The library returns the first inline image bytes from Google's response. `Size` and `Quality` are reserved on the
-public request type but are not provider-mapped yet.
+`ImageGenerationModel` selects both the provider and the model. OpenAI image generation uses the Image API and
+returns the decoded PNG bytes from `data[0].b64_json`; `Size` and `Quality` map directly to the request. Google
+image generation remains available through the default `Gemini25FlashImage` model and returns the first inline
+image bytes from Gemini's response.
 
 ## Configuration
 

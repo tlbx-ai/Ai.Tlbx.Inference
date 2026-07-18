@@ -160,6 +160,34 @@ internal static class IntegrationScenarioHelper
         };
     }
 
+    public static async Task<ImageGenerationSmokeResult> ExecuteOpenAiImageGenerationSmokeAsync(
+        AiInferenceClient client,
+        CancellationToken ct = default)
+    {
+        var imageBytes = await client.GenerateImageAsync(new ImageGenerationRequest
+        {
+            Model = ImageGenerationModel.GptImage2,
+            Prompt = "Create a simple flat illustration of a blue coffee mug on a white background.",
+            Size = "1024x1024",
+            Quality = "low",
+        }, ct);
+
+        var artifactDirectory = Path.Combine(AppContext.BaseDirectory, "TestResults");
+        Directory.CreateDirectory(artifactDirectory);
+
+        var artifactPath = Path.Combine(
+            artifactDirectory,
+            $"openai-image-smoke-{DateTime.UtcNow:yyyyMMdd-HHmmss}.png");
+
+        await File.WriteAllBytesAsync(artifactPath, imageBytes, ct);
+
+        return new ImageGenerationSmokeResult
+        {
+            ImageBytes = imageBytes,
+            ArtifactPath = artifactPath,
+        };
+    }
+
     public static bool IsPng(IReadOnlyList<byte> bytes)
     {
         ReadOnlySpan<byte> pngSignature = [137, 80, 78, 71, 13, 10, 26, 10];
