@@ -79,10 +79,10 @@ public static class AiModelCostCatalog
         new Dictionary<AiModel, TokenCostRates>
         {
             [AiModel.Gpt52] = OpenAi("gpt-5.2", input: 1.75m, cachedInput: 0.175m, output: 14m),
-            [AiModel.Gpt52Pro] = OpenAi("gpt-5.2-pro", input: 15m, cachedInput: null, output: 90m),
+            [AiModel.Gpt52Pro] = OpenAi("gpt-5.2-pro", input: 21m, cachedInput: null, output: 168m),
             [AiModel.Gpt52Chat] = OpenAi("gpt-5.2-chat-latest", input: 1.75m, cachedInput: 0.175m, output: 14m),
             [AiModel.Gpt53Chat] = OpenAi("gpt-5.3-chat-latest", input: 1.75m, cachedInput: 0.175m, output: 14m),
-            [AiModel.Gpt54] = OpenAi("gpt-5.4", input: 1.25m, cachedInput: 0.13m, output: 7.5m),
+            [AiModel.Gpt54] = OpenAi("gpt-5.4", input: 2.5m, cachedInput: 0.25m, output: 15m),
             [AiModel.ClaudeOpus46] = Anthropic("claude-opus-4-6", input: 5m, cacheWrite: 6.25m, cacheRead: 0.5m, output: 25m),
             [AiModel.ClaudeSonnet46] = Anthropic("claude-sonnet-4-6", input: 3m, cacheWrite: 3.75m, cacheRead: 0.3m, output: 15m),
             [AiModel.ClaudeHaiku45] = Anthropic("claude-haiku-4-5-20251001", input: 1m, cacheWrite: 1.25m, cacheRead: 0.1m, output: 5m),

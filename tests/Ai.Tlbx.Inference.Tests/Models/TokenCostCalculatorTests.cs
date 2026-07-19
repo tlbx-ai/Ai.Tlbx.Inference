@@ -68,6 +68,20 @@ public sealed class TokenCostCalculatorTests
     }
 
     [Fact]
+    public void OpenAiStandardRates_DoNotUseBatchDiscounts()
+    {
+        var gpt54 = AiModelCostCatalog.GetRates(AiModel.Gpt54);
+        var gpt52Pro = AiModelCostCatalog.GetRates(AiModel.Gpt52Pro);
+
+        Assert.Equal(2.5m, gpt54.InputPerMillion);
+        Assert.Equal(0.25m, gpt54.CachedInputPerMillion);
+        Assert.Equal(15m, gpt54.OutputPerMillion);
+        Assert.Equal(21m, gpt52Pro.InputPerMillion);
+        Assert.Null(gpt52Pro.CachedInputPerMillion);
+        Assert.Equal(168m, gpt52Pro.OutputPerMillion);
+    }
+
+    [Fact]
     public void Estimate_RejectsNegativeMarkup()
     {
         var rates = new TokenCostRates
