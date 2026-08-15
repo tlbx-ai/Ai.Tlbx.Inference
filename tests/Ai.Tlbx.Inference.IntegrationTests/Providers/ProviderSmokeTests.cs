@@ -27,6 +27,26 @@ public sealed class ProviderSmokeTests
         });
     }
 
+    [RequiresEnvironmentFact("OPENAI_API_KEY")]
+    public async Task OpenAi_Gpt56Luna_HighReasoningAnd64KOutput_ReturnsContent()
+    {
+        await IntegrationTestTimeout.ExecuteAsync(async ct =>
+        {
+            using var testClient = IntegrationScenarioHelper.CreateClient(ProviderType.OpenAi);
+            var response = await testClient.Client.CompleteAsync(new CompletionRequest
+            {
+                Model = AiModel.Gpt56Luna,
+                Messages = [new ChatMessage { Role = ChatRole.User, Content = "Antworte exakt mit: LUNA-OK" }],
+                ThinkingBudget = 32_000,
+                MaxTokens = 65_536,
+            }, ct);
+
+            Assert.Contains("LUNA-OK", response.Content, StringComparison.Ordinal);
+            Assert.True(response.Usage.OutputTokens >= response.Usage.ThinkingTokens);
+            Assert.Equal(response.Usage.InputTokens + response.Usage.OutputTokens, response.Usage.TotalTokens);
+        });
+    }
+
     [RequiresEnvironmentTheory("ANTHROPIC_API_KEY")]
     [MemberData(nameof(AnthropicModels))]
     public async Task Anthropic_SimplePrompt_ReturnsContent(AiModel model)

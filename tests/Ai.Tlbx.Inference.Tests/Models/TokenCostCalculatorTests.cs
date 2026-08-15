@@ -32,9 +32,9 @@ public sealed class TokenCostCalculatorTests
         Assert.Equal(850, estimate.UncachedInputTokens);
         Assert.Equal(100, estimate.CacheReadTokens);
         Assert.Equal(50, estimate.CacheWriteTokens);
-        Assert.Equal(225, estimate.OutputTokens);
-        Assert.Equal(0.0132m, estimate.ProviderCost);
-        Assert.Equal(0.0264m, estimate.CustomerCost);
+        Assert.Equal(200, estimate.OutputTokens);
+        Assert.Equal(0.0127m, estimate.ProviderCost);
+        Assert.Equal(0.0254m, estimate.CustomerCost);
         Assert.Equal(100m, estimate.MarkupPercent);
     }
 
@@ -71,11 +71,15 @@ public sealed class TokenCostCalculatorTests
     public void OpenAiStandardRates_DoNotUseBatchDiscounts()
     {
         var gpt54 = AiModelCostCatalog.GetRates(AiModel.Gpt54);
+        var gpt56Luna = AiModelCostCatalog.GetRates(AiModel.Gpt56Luna);
         var gpt52Pro = AiModelCostCatalog.GetRates(AiModel.Gpt52Pro);
 
         Assert.Equal(2.5m, gpt54.InputPerMillion);
         Assert.Equal(0.25m, gpt54.CachedInputPerMillion);
         Assert.Equal(15m, gpt54.OutputPerMillion);
+        Assert.Equal(0.20m, gpt56Luna.InputPerMillion);
+        Assert.Equal(0.02m, gpt56Luna.CachedInputPerMillion);
+        Assert.Equal(1.20m, gpt56Luna.OutputPerMillion);
         Assert.Equal(21m, gpt52Pro.InputPerMillion);
         Assert.Null(gpt52Pro.CachedInputPerMillion);
         Assert.Equal(168m, gpt52Pro.OutputPerMillion);

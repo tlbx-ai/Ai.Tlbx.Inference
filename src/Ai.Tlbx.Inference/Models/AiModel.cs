@@ -8,6 +8,7 @@ public enum AiModel
     Gpt52Chat,
     Gpt53Chat,
     Gpt54,
+    Gpt56Luna,
 
     // Anthropic
     ClaudeOpus46,

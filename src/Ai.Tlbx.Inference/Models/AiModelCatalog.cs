@@ -31,6 +31,12 @@ public static class AiModelCatalog
                 ModelEndpointFamily.ChatCompletions,
                 supportsThinking: false, supportsChatCompletionsApi: true, supportsResponsesApi: true,
                 defaultSmokeMaxTokens: 128, retrySmokeMaxTokens: 256),
+            [AiModel.Gpt56Luna] = Create(
+                AiModel.Gpt56Luna, "gpt-5.6-luna", "GPT-5.6 Luna", ProviderType.OpenAi, 1050000,
+                ModelEndpointFamily.ChatCompletions,
+                supportsThinking: true, supportsChatCompletionsApi: true, supportsResponsesApi: true,
+                defaultSmokeMaxTokens: 128, retrySmokeMaxTokens: 256,
+                requiresReasoningBudgetHeadroom: true),
             [AiModel.ClaudeOpus46] = Create(
                 AiModel.ClaudeOpus46, "claude-opus-4-6", "Claude Opus 4.6", ProviderType.Anthropic, 200000,
                 ModelEndpointFamily.AnthropicMessages,

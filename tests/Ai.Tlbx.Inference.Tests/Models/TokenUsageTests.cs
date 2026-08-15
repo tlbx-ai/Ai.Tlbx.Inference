@@ -3,7 +3,7 @@ namespace Ai.Tlbx.Inference.Tests.Models;
 public sealed class TokenUsageTests
 {
     [Fact]
-    public void TotalTokens_SumsInputOutputAndThinking()
+    public void TotalTokens_DoesNotDoubleCountThinkingSubset()
     {
         var usage = new TokenUsage
         {
@@ -12,7 +12,7 @@ public sealed class TokenUsageTests
             ThinkingTokens = 25,
         };
 
-        Assert.Equal(175, usage.TotalTokens);
+        Assert.Equal(150, usage.TotalTokens);
     }
 
     [Fact]

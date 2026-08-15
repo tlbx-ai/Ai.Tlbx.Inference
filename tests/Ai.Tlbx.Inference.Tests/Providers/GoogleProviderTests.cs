@@ -72,7 +72,7 @@ public sealed class GoogleProviderTests
         var response = await provider.CompleteAsync(BuildSimpleRequest(), CancellationToken.None);
 
         Assert.Equal(100, response.Usage.InputTokens);
-        Assert.Equal(50, response.Usage.OutputTokens);
+        Assert.Equal(60, response.Usage.OutputTokens);
         Assert.Equal(20, response.Usage.CacheReadTokens);
         Assert.Equal(10, response.Usage.ThinkingTokens);
     }

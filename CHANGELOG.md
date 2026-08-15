@@ -4,6 +4,15 @@
 
 ### Added
 
+- GPT-5.6 Luna (`gpt-5.6-luna`) with reasoning, endpoint capability, and standard-price metadata.
+
+### Fixed
+
+- Token totals and token costs no longer add reasoning tokens twice when a provider reports reasoning as a subset of billed output tokens.
+- Google usage normalizes separately reported thought tokens into the billed output total while retaining the reasoning subset for diagnostics.
+
+### Added
+
 - Typed image-model routing through `ImageGenerationModel`, including OpenAI GPT Image 2, GPT Image 1.5, GPT Image 1, and GPT Image 1 Mini.
 - OpenAI Image API generation with explicit PNG output plus size and quality mapping.
 

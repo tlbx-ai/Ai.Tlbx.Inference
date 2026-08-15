@@ -596,7 +596,7 @@ internal sealed class GoogleProvider : IProvider
         return new TokenUsage
         {
             InputTokens = inputTokens,
-            OutputTokens = outputTokens,
+            OutputTokens = outputTokens + thinkingTokens,
             CacheReadTokens = cacheRead,
             ThinkingTokens = thinkingTokens,
         };

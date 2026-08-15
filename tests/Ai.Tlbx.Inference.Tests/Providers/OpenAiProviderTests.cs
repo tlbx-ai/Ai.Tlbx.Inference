@@ -305,6 +305,41 @@ public sealed class OpenAiProviderTests
     }
 
     [Fact]
+    public async Task CompleteAsync_LunaSendsHighReasoningAnd64KOutputLimit()
+    {
+        var json = BuildChatResponse("Hi", 1, 1);
+        string? capturedBody = null;
+        var handler = new MockHttpHandler(async req =>
+        {
+            capturedBody = await req.Content!.ReadAsStringAsync();
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(json, System.Text.Encoding.UTF8, "application/json"),
+            };
+        });
+        var provider = new OpenAiProvider(new ProviderRequestContext
+        {
+            HttpClient = new HttpClient(handler),
+            BaseUrl = "https://api.openai.com",
+            ApiKey = "test",
+        });
+
+        await provider.CompleteAsync(new ProviderRequest
+        {
+            ModelApiName = "gpt-5.6-luna",
+            Messages = [new ChatMessage { Role = ChatRole.User, Content = "Hello" }],
+            MaxTokens = 65_536,
+            ThinkingBudget = 32_000,
+        }, CancellationToken.None);
+
+        Assert.NotNull(capturedBody);
+        using var doc = JsonDocument.Parse(capturedBody!);
+        Assert.Equal("gpt-5.6-luna", doc.RootElement.GetProperty("model").GetString());
+        Assert.Equal(65_536, doc.RootElement.GetProperty("max_completion_tokens").GetInt32());
+        Assert.Equal("high", doc.RootElement.GetProperty("reasoning_effort").GetString());
+    }
+
+    [Fact]
     public async Task CompleteAsync_WithAttachment_UploadsFileAndUsesResponsesApi()
     {
         var requests = new List<(string Method, string Url, string? Body)>();

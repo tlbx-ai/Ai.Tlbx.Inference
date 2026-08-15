@@ -43,7 +43,7 @@ public static class TokenCostCalculator
         var cacheReadTokens = Math.Max(0, usage.CacheReadTokens);
         var cacheWriteTokens = Math.Max(0, usage.CacheWriteTokens);
         var uncachedInputTokens = Math.Max(0, usage.InputTokens - cacheReadTokens - cacheWriteTokens);
-        var outputTokens = Math.Max(0, usage.OutputTokens + usage.ThinkingTokens);
+        var outputTokens = Math.Max(0, usage.OutputTokens);
 
         var providerCost =
             CostForTokens(uncachedInputTokens, rates.InputPerMillion) +
@@ -83,6 +83,7 @@ public static class AiModelCostCatalog
             [AiModel.Gpt52Chat] = OpenAi("gpt-5.2-chat-latest", input: 1.75m, cachedInput: 0.175m, output: 14m),
             [AiModel.Gpt53Chat] = OpenAi("gpt-5.3-chat-latest", input: 1.75m, cachedInput: 0.175m, output: 14m),
             [AiModel.Gpt54] = OpenAi("gpt-5.4", input: 2.5m, cachedInput: 0.25m, output: 15m),
+            [AiModel.Gpt56Luna] = OpenAi("gpt-5.6-luna", input: 0.20m, cachedInput: 0.02m, output: 1.20m),
             [AiModel.ClaudeOpus46] = Anthropic("claude-opus-4-6", input: 5m, cacheWrite: 6.25m, cacheRead: 0.5m, output: 25m),
             [AiModel.ClaudeSonnet46] = Anthropic("claude-sonnet-4-6", input: 3m, cacheWrite: 3.75m, cacheRead: 0.3m, output: 15m),
             [AiModel.ClaudeHaiku45] = Anthropic("claude-haiku-4-5-20251001", input: 1m, cacheWrite: 1.25m, cacheRead: 0.1m, output: 5m),

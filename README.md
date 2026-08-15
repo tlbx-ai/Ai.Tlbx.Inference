@@ -15,7 +15,7 @@ Trim-friendly .NET AI inference client for OpenAI, Anthropic, Google, and xAI, b
 - **Tool calling** — unified tool loop with streaming support, lives once in the facade
 - **Embeddings** — OpenAI and Google embedding models with batch support
 - **Image generation** — Google Gemini image generation via `gemini-2.5-flash-image`
-- **Token metering** — `TokenUsage` on every response including cache and thinking tokens
+- **Token metering** — `TokenUsage` on every response, with reasoning retained as a diagnostic subset of billed output tokens
 - **Resilience** — Polly v8 retry and timeout handling wired into provider HTTP execution
 - **Thinking budget** — universal mapping across all providers that support reasoning
 - **Diagnostics** — `CompletionDiagnostics` exposes endpoint family, stop reason, and truncation hints
@@ -39,6 +39,7 @@ Trim-friendly .NET AI inference client for OpenAI, Anthropic, Google, and xAI, b
 | GPT-5.2 Chat | `AiModel.Gpt52Chat` | 128k |
 | GPT-5.3 Chat | `AiModel.Gpt53Chat` | 128k |
 | GPT-5.4 | `AiModel.Gpt54` | 1.05M |
+| GPT-5.6 Luna | `AiModel.Gpt56Luna` | 1.05M |
 
 ### Anthropic
 | Model | Enum | Context |
