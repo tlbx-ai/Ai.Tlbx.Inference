@@ -33,7 +33,7 @@ public static class AiModelCatalog
                 defaultSmokeMaxTokens: 128, retrySmokeMaxTokens: 256),
             [AiModel.Gpt56Luna] = Create(
                 AiModel.Gpt56Luna, "gpt-5.6-luna", "GPT-5.6 Luna", ProviderType.OpenAi, 1050000,
-                ModelEndpointFamily.ChatCompletions,
+                ModelEndpointFamily.Responses,
                 supportsThinking: true, supportsChatCompletionsApi: true, supportsResponsesApi: true,
                 defaultSmokeMaxTokens: 128, retrySmokeMaxTokens: 256,
                 requiresReasoningBudgetHeadroom: true),

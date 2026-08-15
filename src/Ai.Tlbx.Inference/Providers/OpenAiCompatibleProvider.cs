@@ -153,6 +153,7 @@ internal abstract class OpenAiCompatibleProvider : IProvider
                             toolCalls.Add(new ToolCallRequest
                             {
                                 Id = item.GetProperty("call_id").GetString() ?? item.GetProperty("id").GetString()!,
+                                ProviderItemId = item.TryGetProperty("id", out var itemId) ? itemId.GetString() : null,
                                 Name = item.GetProperty("name").GetString()!,
                                 Arguments = item.TryGetProperty("arguments", out var argsEl) ? argsEl.GetString() ?? "" : "",
                             });
@@ -261,22 +262,26 @@ internal abstract class OpenAiCompatibleProvider : IProvider
                             item.TryGetProperty("type", out var itemType) &&
                             itemType.GetString() == "function_call")
                         {
-                            var tcId = item.GetProperty("id").GetString()!;
+                            var providerItemId = item.GetProperty("id").GetString()!;
+                            var tcId = item.TryGetProperty("call_id", out var callIdElement)
+                                ? callIdElement.GetString() ?? providerItemId
+                                : providerItemId;
                             var tcName = item.GetProperty("name").GetString()!;
                             var tcArgs = item.TryGetProperty("arguments", out var argsEl)
                                 ? argsEl.GetString() ?? ""
-                                : toolCallArgs.TryGetValue(tcId, out var accumulated) ? accumulated.ToString() : "";
+                                : toolCallArgs.TryGetValue(providerItemId, out var accumulated) ? accumulated.ToString() : "";
 
                             yield return new ProviderStreamEvent
                             {
                                 ToolCall = new ToolCallRequest
                                 {
                                     Id = tcId,
+                                    ProviderItemId = providerItemId,
                                     Name = tcName,
                                     Arguments = tcArgs,
                                 },
                             };
-                            toolCallArgs.Remove(tcId);
+                            toolCallArgs.Remove(providerItemId);
                         }
                         break;
 
@@ -679,15 +684,17 @@ internal abstract class OpenAiCompatibleProvider : IProvider
                 case ChatRole.Assistant when msg.ToolCalls is { Count: > 0 }:
                     foreach (var tc in msg.ToolCalls)
                     {
-                        input.Add((JsonNode)new JsonObject
+                        var functionCall = new JsonObject
                         {
                             ["type"] = "function_call",
-                            ["id"] = tc.Id,
                             ["call_id"] = tc.Id,
                             ["name"] = tc.Name,
                             ["arguments"] = tc.Arguments,
                             ["status"] = "completed",
-                        });
+                        };
+                        if (!string.IsNullOrWhiteSpace(tc.ProviderItemId))
+                            functionCall["id"] = tc.ProviderItemId;
+                        input.Add((JsonNode)functionCall);
                     }
                     break;
                 case ChatRole.Assistant:
@@ -740,6 +747,14 @@ internal abstract class OpenAiCompatibleProvider : IProvider
 
         if (request.MaxTokens.HasValue)
             body["max_output_tokens"] = request.MaxTokens.Value;
+
+        if (request.ThinkingBudget.HasValue)
+        {
+            body["reasoning"] = new JsonObject
+            {
+                ["effort"] = MapReasoningEffort(request.ThinkingBudget.Value),
+            };
+        }
 
         if (request.TopP.HasValue)
             body["top_p"] = request.TopP.Value;

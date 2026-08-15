@@ -1,6 +1,13 @@
 # Changelog
 
-## Unreleased
+## 2.2.2 - 2026-08-15
+
+### Fixed
+
+- GPT-5.6 Luna now prefers the Responses API and sends its reasoning effort there, enabling high-reasoning function-tool loops.
+- Responses API tool loops now preserve the distinct function-item (`fc_...`) and tool-call (`call_...`) identifiers across turns.
+
+## 2.2.0 - 2026-08-15
 
 ### Added
 

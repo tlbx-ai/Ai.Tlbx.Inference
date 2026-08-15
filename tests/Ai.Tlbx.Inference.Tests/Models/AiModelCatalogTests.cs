@@ -23,6 +23,16 @@ public sealed class AiModelCatalogTests
     }
 
     [Fact]
+    public void Gpt56Luna_PrefersResponsesApiForReasoningToolCalls()
+    {
+        var descriptor = AiModelCatalog.Get(AiModel.Gpt56Luna);
+
+        Assert.Equal(ModelEndpointFamily.Responses, descriptor.PreferredEndpoint);
+        Assert.True(descriptor.Capabilities.SupportsChatCompletionsApi);
+        Assert.True(descriptor.Capabilities.SupportsResponsesApi);
+    }
+
+    [Fact]
     public void GoogleCatalogEntries_AreGroupedByProvider()
     {
         var models = AiModelCatalog.GetByProvider(ProviderType.Google);

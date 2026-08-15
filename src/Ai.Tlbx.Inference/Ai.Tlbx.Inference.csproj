@@ -10,7 +10,7 @@
     <RepositoryType>git</RepositoryType>
     <PackageTags>ai;inference;openai;anthropic;google;gemini;xai;grok;llm;embeddings;tool-calling;streaming;attachments;aot;trimming</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>
-    <PackageReleaseNotes>2.1.4: add typed image-model routing and OpenAI Image API generation, including GPT Image 2, while preserving Gemini image generation as the default.</PackageReleaseNotes>
+    <PackageReleaseNotes>2.2.2: add GPT-5.6 Luna metadata and pricing; route Luna reasoning and tool loops through the Responses API; preserve Responses function-item identifiers; and prevent reasoning-token double counting.</PackageReleaseNotes>
     <PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <NoWarn>CS1591</NoWarn>

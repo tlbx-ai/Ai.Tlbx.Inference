@@ -307,10 +307,21 @@ public sealed class OpenAiProviderTests
     [Fact]
     public async Task CompleteAsync_LunaSendsHighReasoningAnd64KOutputLimit()
     {
-        var json = BuildChatResponse("Hi", 1, 1);
+        const string json = """
+            {
+              "status": "completed",
+              "output": [{
+                "type": "message",
+                "content": [{ "type": "output_text", "text": "Hi" }]
+              }],
+              "usage": { "input_tokens": 1, "output_tokens": 1 }
+            }
+            """;
         string? capturedBody = null;
+        string? capturedPath = null;
         var handler = new MockHttpHandler(async req =>
         {
+            capturedPath = req.RequestUri!.AbsolutePath;
             capturedBody = await req.Content!.ReadAsStringAsync();
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
@@ -330,13 +341,85 @@ public sealed class OpenAiProviderTests
             Messages = [new ChatMessage { Role = ChatRole.User, Content = "Hello" }],
             MaxTokens = 65_536,
             ThinkingBudget = 32_000,
+            PreferredEndpoint = ModelEndpointFamily.Responses,
+            Tools =
+            [
+                new ToolDefinition
+                {
+                    Name = "finish",
+                    Description = "Finish the task",
+                    ParametersSchema = JsonDocument.Parse("""{"type":"object","properties":{}}""").RootElement.Clone(),
+                },
+            ],
         }, CancellationToken.None);
 
         Assert.NotNull(capturedBody);
+        Assert.Equal("/v1/responses", capturedPath);
         using var doc = JsonDocument.Parse(capturedBody!);
         Assert.Equal("gpt-5.6-luna", doc.RootElement.GetProperty("model").GetString());
-        Assert.Equal(65_536, doc.RootElement.GetProperty("max_completion_tokens").GetInt32());
-        Assert.Equal("high", doc.RootElement.GetProperty("reasoning_effort").GetString());
+        Assert.Equal(65_536, doc.RootElement.GetProperty("max_output_tokens").GetInt32());
+        Assert.Equal("high", doc.RootElement.GetProperty("reasoning").GetProperty("effort").GetString());
+        Assert.Equal("function", doc.RootElement.GetProperty("tools")[0].GetProperty("type").GetString());
+    }
+
+    [Fact]
+    public async Task CompleteAsync_ResponsesToolReplay_PreservesFunctionItemAndCallIds()
+    {
+        string? capturedBody = null;
+        var handler = new MockHttpHandler(async req =>
+        {
+            capturedBody = await req.Content!.ReadAsStringAsync();
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("""
+                    {
+                      "status": "completed",
+                      "output": [{
+                        "type": "message",
+                        "content": [{ "type": "output_text", "text": "done" }]
+                      }],
+                      "usage": { "input_tokens": 2, "output_tokens": 1 }
+                    }
+                    """, System.Text.Encoding.UTF8, "application/json"),
+            };
+        });
+        var provider = new OpenAiProvider(new ProviderRequestContext
+        {
+            HttpClient = new HttpClient(handler),
+            BaseUrl = "https://api.openai.com",
+            ApiKey = "test",
+        });
+
+        await provider.CompleteAsync(new ProviderRequest
+        {
+            ModelApiName = "gpt-5.6-luna",
+            PreferredEndpoint = ModelEndpointFamily.Responses,
+            Messages =
+            [
+                new ChatMessage { Role = ChatRole.User, Content = "Create it" },
+                new ChatMessage
+                {
+                    Role = ChatRole.Assistant,
+                    ToolCalls =
+                    [
+                        new ToolCallRequest
+                        {
+                            Id = "call_123",
+                            ProviderItemId = "fc_123",
+                            Name = "finish",
+                            Arguments = "{}",
+                        },
+                    ],
+                },
+                new ChatMessage { Role = ChatRole.Tool, ToolCallId = "call_123", Content = "ok" },
+            ],
+        }, CancellationToken.None);
+
+        using var doc = JsonDocument.Parse(capturedBody!);
+        var functionCall = doc.RootElement.GetProperty("input")[1];
+        Assert.Equal("fc_123", functionCall.GetProperty("id").GetString());
+        Assert.Equal("call_123", functionCall.GetProperty("call_id").GetString());
+        Assert.Equal("call_123", doc.RootElement.GetProperty("input")[2].GetProperty("call_id").GetString());
     }
 
     [Fact]
