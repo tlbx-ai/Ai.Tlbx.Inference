@@ -119,6 +119,65 @@ public sealed class OpenAiProviderTests
         Assert.Equal("OpenAI image generation response did not include image data.", exception.Message);
     }
 
+    [Fact]
+    public async Task EditImageAsync_SendsMultipartImagesAndDecodesPngBytes()
+    {
+        HttpRequestMessage? capturedRequest = null;
+        byte[]? capturedBody = null;
+        string? capturedContentType = null;
+        var expectedBytes = new byte[] { 0x89, 0x50, 0x4E, 0x47, 0x01 };
+        var responseJson = $$"""{"data":[{"b64_json":"{{Convert.ToBase64String(expectedBytes)}}"}]}""";
+        var handler = new MockHttpHandler(async request =>
+        {
+            capturedRequest = request;
+            capturedContentType = request.Content?.Headers.ContentType?.ToString();
+            capturedBody = request.Content is null ? null : await request.Content.ReadAsByteArrayAsync();
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(responseJson, System.Text.Encoding.UTF8, "application/json"),
+            };
+        });
+        var provider = new OpenAiProvider(new ProviderRequestContext
+        {
+            HttpClient = new HttpClient(handler),
+            BaseUrl = "https://api.openai.com",
+            ApiKey = "test-edit-key",
+        });
+
+        var bytes = await provider.EditImageAsync(new ProviderImageEditRequest
+        {
+            ModelApiName = "gpt-image-2",
+            Prompt = "Keep the composition and make the sky purple",
+            Size = "1536x1024",
+            Quality = "high",
+            Images =
+            [
+                new ImageEditInput { Content = "first-image"u8.ToArray(), FileName = "first.png", MimeType = "image/png" },
+                new ImageEditInput { Content = "second-image"u8.ToArray(), FileName = "second.webp", MimeType = "image/webp" },
+            ],
+        }, CancellationToken.None);
+
+        Assert.Equal(expectedBytes, bytes);
+        Assert.Equal("https://api.openai.com/v1/images/edits", capturedRequest?.RequestUri?.ToString());
+        Assert.Equal("test-edit-key", capturedRequest?.Headers.Authorization?.Parameter);
+        Assert.StartsWith("multipart/form-data; boundary=", capturedContentType, StringComparison.Ordinal);
+        var body = System.Text.Encoding.UTF8.GetString(capturedBody!);
+        Assert.Contains("name=model", body, StringComparison.Ordinal);
+        Assert.Contains("gpt-image-2", body, StringComparison.Ordinal);
+        Assert.Contains("name=prompt", body, StringComparison.Ordinal);
+        Assert.Contains("make the sky purple", body, StringComparison.Ordinal);
+        Assert.Contains("name=size", body, StringComparison.Ordinal);
+        Assert.Contains("1536x1024", body, StringComparison.Ordinal);
+        Assert.Contains("name=quality", body, StringComparison.Ordinal);
+        Assert.Contains("high", body, StringComparison.Ordinal);
+        var imagePartCount = System.Text.RegularExpressions.Regex.Matches(body, "name=(?:\\\")?image\\[\\](?:\\\")?").Count;
+        Assert.True(imagePartCount == 2, body);
+        Assert.Contains("filename=first.png", body, StringComparison.Ordinal);
+        Assert.Contains("filename=second.webp", body, StringComparison.Ordinal);
+        Assert.Contains("first-image", body, StringComparison.Ordinal);
+        Assert.Contains("second-image", body, StringComparison.Ordinal);
+    }
+
     private static (OpenAiProvider Provider, HttpRequestMessage? CapturedRequest) CreateProvider(
         string responseJson,
         HttpStatusCode statusCode = HttpStatusCode.OK)

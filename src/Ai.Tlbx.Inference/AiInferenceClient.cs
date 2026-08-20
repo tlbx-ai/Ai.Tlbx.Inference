@@ -393,6 +393,35 @@ public sealed class AiInferenceClient : IAiInferenceClient
         return await provider.GenerateImageAsync(providerRequest, ct).ConfigureAwait(false);
     }
 
+    public async Task<byte[]> EditImageAsync(ImageEditRequest request, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (string.IsNullOrWhiteSpace(request.Prompt))
+        {
+            throw new ArgumentException("Image edit prompt is required.", nameof(request));
+        }
+        if (request.Images is not { Count: > 0 })
+        {
+            throw new ArgumentException("At least one image input is required for an image edit.", nameof(request));
+        }
+        if (request.Images.Any(image => image.Content.IsEmpty
+            || string.IsNullOrWhiteSpace(image.FileName)
+            || string.IsNullOrWhiteSpace(image.MimeType)))
+        {
+            throw new ArgumentException("Every image edit input requires content, a file name, and a MIME type.", nameof(request));
+        }
+
+        var provider = GetProvider(request.Model.GetProvider());
+        return await provider.EditImageAsync(new ProviderImageEditRequest
+        {
+            ModelApiName = request.Model.ToApiName(),
+            Prompt = request.Prompt,
+            Images = request.Images,
+            Size = request.Size,
+            Quality = request.Quality,
+        }, ct).ConfigureAwait(false);
+    }
+
     private IProvider GetProvider(ProviderType providerType)
     {
         if (_providers.TryGetValue(providerType, out var provider))

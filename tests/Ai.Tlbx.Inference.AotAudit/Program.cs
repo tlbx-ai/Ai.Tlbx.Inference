@@ -45,6 +45,21 @@ var imageRequest = new ImageGenerationRequest
     Prompt = "A sunset",
 };
 
+var imageEditRequest = new ImageEditRequest
+{
+    Model = ImageGenerationModel.GptImage2,
+    Prompt = "Make the sunset purple",
+    Images =
+    [
+        new ImageEditInput
+        {
+            Content = new byte[] { 0x89, 0x50, 0x4E, 0x47 },
+            FileName = "sunset.png",
+            MimeType = "image/png",
+        },
+    ],
+};
+
 var tools = new List<ToolDefinition>
 {
     new()
@@ -71,6 +86,7 @@ _ = client.StreamWithToolsAsync(completionRequest, tools, toolExecutor);
 _ = client.EmbedAsync(embeddingRequest);
 _ = client.EmbedBatchAsync(batchEmbeddingRequest);
 _ = client.GenerateImageAsync(imageRequest);
+_ = client.EditImageAsync(imageEditRequest);
 
 Console.WriteLine("AOT audit app compiled.");
 

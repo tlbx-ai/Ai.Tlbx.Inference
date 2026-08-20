@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.4.0 - 2026-08-20
+
+### Added
+
+- First-class `gpt-image-2` editing through `EditImageAsync`, including multiple reference images and explicit multipart Image API support.
+
 ## 2.3.0 - 2026-08-20
 
 ### Added

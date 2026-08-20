@@ -514,6 +514,9 @@ internal abstract class OpenAiCompatibleProvider : IProvider
     public virtual Task<byte[]> GenerateImageAsync(ProviderImageRequest request, CancellationToken ct)
         => throw new NotSupportedException("Image generation is not supported by this provider.");
 
+    public virtual Task<byte[]> EditImageAsync(ProviderImageEditRequest request, CancellationToken ct)
+        => throw new NotSupportedException("Image editing is not supported by this provider.");
+
     private JsonObject BuildRequestBody(ProviderRequest request, bool stream)
     {
         var messages = new JsonArray();

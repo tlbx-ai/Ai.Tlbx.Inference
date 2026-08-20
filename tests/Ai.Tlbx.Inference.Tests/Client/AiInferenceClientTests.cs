@@ -183,6 +183,60 @@ public sealed class AiInferenceClientTests
     }
 
     [Fact]
+    public async Task EditImageAsync_RoutesGptImageModelToOpenAi()
+    {
+        HttpRequestMessage? captured = null;
+        var expectedBytes = "edited-image"u8.ToArray();
+        var handler = new MockHttpHandler(async request =>
+        {
+            captured = request;
+            await Task.CompletedTask;
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    $"{{\"data\":[{{\"b64_json\":\"{Convert.ToBase64String(expectedBytes)}\"}}]}}",
+                    System.Text.Encoding.UTF8,
+                    "application/json"),
+            };
+        });
+        var client = CreateClient(handler, options => options.AddOpenAi("key"));
+
+        var bytes = await client.EditImageAsync(new ImageEditRequest
+        {
+            Model = ImageGenerationModel.GptImage2,
+            Prompt = "edit it",
+            Images =
+            [
+                new ImageEditInput { Content = "source"u8.ToArray(), FileName = "source.png", MimeType = "image/png" },
+            ],
+        });
+
+        Assert.Equal(expectedBytes, bytes);
+        Assert.Equal("/v1/images/edits", captured?.RequestUri?.AbsolutePath);
+    }
+
+    [Fact]
+    public async Task EditImageAsync_RejectsMissingInputsBeforeNetworkCall()
+    {
+        var requests = 0;
+        var handler = new MockHttpHandler(async _ =>
+        {
+            requests++;
+            await Task.CompletedTask;
+            return new HttpResponseMessage(HttpStatusCode.OK);
+        });
+        var client = CreateClient(handler, options => options.AddOpenAi("key"));
+
+        await Assert.ThrowsAsync<ArgumentException>(() => client.EditImageAsync(new ImageEditRequest
+        {
+            Prompt = "edit it",
+            Images = [],
+        }));
+
+        Assert.Equal(0, requests);
+    }
+
+    [Fact]
     public async Task CompleteAsync_Generic_DeserializesJson()
     {
         var json = """

@@ -7,6 +7,7 @@ internal interface IProvider
     Task<ProviderEmbeddingResponse> EmbedAsync(ProviderEmbeddingRequest request, CancellationToken ct);
     Task<ProviderBatchEmbeddingResponse> EmbedBatchAsync(ProviderBatchEmbeddingRequest request, CancellationToken ct);
     Task<byte[]> GenerateImageAsync(ProviderImageRequest request, CancellationToken ct);
+    Task<byte[]> EditImageAsync(ProviderImageEditRequest request, CancellationToken ct);
 }
 
 internal sealed record ProviderRequest
@@ -77,6 +78,15 @@ internal sealed record ProviderImageRequest
 {
     public required string ModelApiName { get; init; }
     public required string Prompt { get; init; }
+    public string? Size { get; init; }
+    public string? Quality { get; init; }
+}
+
+internal sealed record ProviderImageEditRequest
+{
+    public required string ModelApiName { get; init; }
+    public required string Prompt { get; init; }
+    public required IReadOnlyList<ImageEditInput> Images { get; init; }
     public string? Size { get; init; }
     public string? Quality { get; init; }
 }

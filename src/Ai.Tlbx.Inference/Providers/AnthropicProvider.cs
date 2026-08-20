@@ -285,6 +285,9 @@ internal sealed class AnthropicProvider : IProvider
     public Task<byte[]> GenerateImageAsync(ProviderImageRequest request, CancellationToken ct)
         => throw new NotSupportedException("Anthropic does not support image generation.");
 
+    public Task<byte[]> EditImageAsync(ProviderImageEditRequest request, CancellationToken ct)
+        => throw new NotSupportedException("Anthropic does not support image editing.");
+
     private JsonObject BuildRequestBody(ProviderRequest request, bool stream)
     {
         var messages = new JsonArray();

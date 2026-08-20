@@ -37,4 +37,6 @@ public interface IAiInferenceClient
     Task<BatchEmbeddingResponse> EmbedBatchAsync(BatchEmbeddingRequest request, CancellationToken ct = default);
 
     Task<byte[]> GenerateImageAsync(ImageGenerationRequest request, CancellationToken ct = default);
+
+    Task<byte[]> EditImageAsync(ImageEditRequest request, CancellationToken ct = default);
 }

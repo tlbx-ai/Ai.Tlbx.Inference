@@ -342,6 +342,9 @@ internal sealed class GoogleProvider : IProvider
         return Convert.FromBase64String(inlineData);
     }
 
+    public Task<byte[]> EditImageAsync(ProviderImageEditRequest request, CancellationToken ct)
+        => throw new NotSupportedException("Google image editing is not supported by this provider.");
+
     private JsonObject BuildRequestBody(ProviderRequest request)
     {
         var body = new JsonObject();

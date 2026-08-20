@@ -297,6 +297,30 @@ returns the decoded PNG bytes from `data[0].b64_json`; `Size` and `Quality` map 
 image generation remains available through the default `Gemini25FlashImage` model and returns the first inline
 image bytes from Gemini's response.
 
+To edit one or more reference images with OpenAI, use the explicit edit operation:
+
+```csharp
+var editedBytes = await client.EditImageAsync(new ImageEditRequest
+{
+    Model = ImageGenerationModel.GptImage2,
+    Prompt = "Keep the composition, but make the teapot cobalt blue",
+    Images =
+    [
+        new ImageEditInput
+        {
+            Content = imageBytes,
+            FileName = "teapot.png",
+            MimeType = "image/png"
+        }
+    ],
+    Size = "1536x1024",
+    Quality = "high"
+});
+```
+
+OpenAI edits use multipart `image[]` inputs and return decoded PNG bytes. `gpt-image-2` preserves image inputs at
+high fidelity automatically.
+
 ## Configuration
 
 ### Logging
