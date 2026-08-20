@@ -9,6 +9,9 @@ public sealed record TokenCostRates
     public decimal? CachedInputPerMillion { get; init; }
     public decimal? CacheWriteInputPerMillion { get; init; }
     public required decimal OutputPerMillion { get; init; }
+    public decimal? WebSearchPerThousand { get; init; }
+    public decimal? ImageSearchPerThousand { get; init; }
+    public decimal? XSearchPerThousand { get; init; }
 }
 
 public sealed record TokenCostEstimate
@@ -24,12 +27,21 @@ public sealed record TokenCostEstimate
     public required decimal ProviderCost { get; init; }
     public required decimal CustomerCost { get; init; }
     public required decimal MarkupPercent { get; init; }
+    public decimal HostedToolCost { get; init; }
+    public GroundingUsage GroundingUsage { get; init; }
 }
 
 public static class TokenCostCalculator
 {
     public static TokenCostEstimate Estimate(
         TokenUsage usage,
+        TokenCostRates rates,
+        decimal markupPercent = 0m)
+        => Estimate(usage, new GroundingUsage(), rates, markupPercent);
+
+    public static TokenCostEstimate Estimate(
+        TokenUsage usage,
+        GroundingUsage groundingUsage,
         TokenCostRates rates,
         decimal markupPercent = 0m)
     {
@@ -45,11 +57,17 @@ public static class TokenCostCalculator
         var uncachedInputTokens = Math.Max(0, usage.InputTokens - cacheReadTokens - cacheWriteTokens);
         var outputTokens = Math.Max(0, usage.OutputTokens);
 
-        var providerCost =
+        var tokenCost =
             CostForTokens(uncachedInputTokens, rates.InputPerMillion) +
             CostForTokens(cacheReadTokens, rates.CachedInputPerMillion ?? rates.InputPerMillion) +
             CostForTokens(cacheWriteTokens, rates.CacheWriteInputPerMillion ?? rates.InputPerMillion) +
             CostForTokens(outputTokens, rates.OutputPerMillion);
+
+        var hostedToolCost =
+            CostForCalls(groundingUsage.WebSearchCalls, rates.WebSearchPerThousand) +
+            CostForCalls(groundingUsage.ImageSearchCalls, rates.ImageSearchPerThousand ?? rates.WebSearchPerThousand) +
+            CostForCalls(groundingUsage.XSearchCalls, rates.XSearchPerThousand);
+        var providerCost = tokenCost + hostedToolCost;
 
         var customerCost = providerCost * (1m + markupPercent / 100m);
 
@@ -65,12 +83,17 @@ public static class TokenCostCalculator
             OutputTokens = outputTokens,
             ProviderCost = providerCost,
             CustomerCost = customerCost,
-            MarkupPercent = markupPercent
+            MarkupPercent = markupPercent,
+            HostedToolCost = hostedToolCost,
+            GroundingUsage = groundingUsage
         };
     }
 
     private static decimal CostForTokens(int tokens, decimal pricePerMillion)
         => tokens <= 0 ? 0m : tokens / 1_000_000m * pricePerMillion;
+
+    private static decimal CostForCalls(int calls, decimal? pricePerThousand)
+        => calls <= 0 || !pricePerThousand.HasValue ? 0m : calls / 1_000m * pricePerThousand.Value;
 }
 
 public static class AiModelCostCatalog
@@ -123,20 +146,27 @@ public static class AiModelCostCatalog
     public static TokenCostEstimate EstimateCost(this TokenUsage usage, AiModel model, decimal markupPercent = 0m)
         => TokenCostCalculator.Estimate(usage, GetRates(model), markupPercent);
 
+    public static TokenCostEstimate EstimateCost(
+        this TokenUsage usage,
+        GroundingUsage groundingUsage,
+        AiModel model,
+        decimal markupPercent = 0m)
+        => TokenCostCalculator.Estimate(usage, groundingUsage, GetRates(model), markupPercent);
+
     public static TokenCostEstimate EstimateCost(this TokenUsage usage, EmbeddingModel model, decimal markupPercent = 0m)
         => TokenCostCalculator.Estimate(usage, GetRates(model), markupPercent);
 
     private static TokenCostRates OpenAi(string model, decimal input, decimal? cachedInput, decimal output)
-        => Create("openai", model, input, cachedInput, cacheWrite: null, output);
+        => Create("openai", model, input, cachedInput, cacheWrite: null, output, webSearch: 10m, imageSearch: 10m);
 
     private static TokenCostRates Anthropic(string model, decimal input, decimal cacheWrite, decimal cacheRead, decimal output)
-        => Create("anthropic", model, input, cacheRead, cacheWrite, output);
+        => Create("anthropic", model, input, cacheRead, cacheWrite, output, webSearch: 10m);
 
     private static TokenCostRates Google(string model, decimal input, decimal? cachedInput, decimal output)
-        => Create("google", model, input, cachedInput, cacheWrite: null, output);
+        => Create("google", model, input, cachedInput, cacheWrite: null, output, webSearch: 14m);
 
     private static TokenCostRates Xai(string model, decimal input, decimal? cachedInput, decimal output)
-        => Create("xai", model, input, cachedInput, cacheWrite: null, output);
+        => Create("xai", model, input, cachedInput, cacheWrite: null, output, webSearch: 5m, imageSearch: 5m, xSearch: 5m);
 
     private static TokenCostRates Create(
         string providerId,
@@ -144,7 +174,10 @@ public static class AiModelCostCatalog
         decimal input,
         decimal? cachedInput,
         decimal? cacheWrite,
-        decimal output)
+        decimal output,
+        decimal? webSearch = null,
+        decimal? imageSearch = null,
+        decimal? xSearch = null)
         => new()
         {
             ProviderId = providerId,
@@ -152,6 +185,9 @@ public static class AiModelCostCatalog
             InputPerMillion = input,
             CachedInputPerMillion = cachedInput,
             CacheWriteInputPerMillion = cacheWrite,
-            OutputPerMillion = output
+            OutputPerMillion = output,
+            WebSearchPerThousand = webSearch,
+            ImageSearchPerThousand = imageSearch,
+            XSearchPerThousand = xSearch
         };
 }

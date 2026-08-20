@@ -30,6 +30,7 @@ public sealed class AiInferenceClient : IAiInferenceClient
 
     public async Task<CompletionResponse<string>> CompleteAsync(CompletionRequest request, CancellationToken ct = default)
     {
+        ValidateGroundingRequest(request);
         var descriptor = AiModelCatalog.Get(request.Model);
         var provider = GetProvider(descriptor.Provider);
         var providerRequest = BuildProviderRequest(request);
@@ -42,11 +43,13 @@ public sealed class AiInferenceClient : IAiInferenceClient
             Model = request.Model,
             StopReason = response.StopReason,
             Diagnostics = BuildDiagnostics(descriptor, response),
+            Grounding = response.Grounding,
         };
     }
 
     public async Task<CompletionResponse<T>> CompleteAsync<T>(CompletionRequest request, JsonTypeInfo<T> jsonTypeInfo, CancellationToken ct = default)
     {
+        ValidateGroundingRequest(request);
         var schema = request.JsonSchema
             ?? throw new InvalidOperationException("CompletionRequest.JsonSchema must be provided for AOT-compatible structured output.");
         var descriptor = AiModelCatalog.Get(request.Model);
@@ -63,6 +66,7 @@ public sealed class AiInferenceClient : IAiInferenceClient
             Model = request.Model,
             StopReason = response.StopReason,
             Diagnostics = BuildDiagnostics(descriptor, response),
+            Grounding = response.Grounding,
         };
     }
 
@@ -70,6 +74,7 @@ public sealed class AiInferenceClient : IAiInferenceClient
         CompletionRequest request,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
+        ValidateGroundingRequest(request);
         var provider = GetProvider(request.Model.GetProvider());
         var providerRequest = BuildProviderRequest(request);
 
@@ -128,12 +133,14 @@ public sealed class AiInferenceClient : IAiInferenceClient
         int maxIterations = 20,
         CancellationToken ct = default)
     {
+        ValidateGroundingRequest(request);
         var descriptor = AiModelCatalog.Get(request.Model);
         var provider = GetProvider(descriptor.Provider);
         var messages = new List<ChatMessage>(request.Messages);
         var totalUsage = new TokenUsage();
         var iterations = 0;
         CompletionDiagnostics? finalDiagnostics = null;
+        GroundingResult? grounding = null;
         var baseReq = BuildProviderRequest(request, tools: tools);
 
         while (iterations < maxIterations)
@@ -142,6 +149,7 @@ public sealed class AiInferenceClient : IAiInferenceClient
             var providerReq = baseReq with { Messages = messages };
             var response = await provider.CompleteAsync(providerReq, ct).ConfigureAwait(false);
             totalUsage += response.Usage;
+            grounding = GroundingResult.Combine(grounding, response.Grounding);
 
             if (response.ToolCalls is null or { Count: 0 })
             {
@@ -152,6 +160,7 @@ public sealed class AiInferenceClient : IAiInferenceClient
                     Iterations = iterations,
                     Messages = messages,
                     Diagnostics = finalDiagnostics ?? BuildDiagnostics(descriptor, response),
+                    Grounding = grounding,
                 };
             }
 
@@ -187,12 +196,14 @@ public sealed class AiInferenceClient : IAiInferenceClient
         int maxIterations = 20,
         CancellationToken ct = default)
     {
+        ValidateGroundingRequest(request);
         var descriptor = AiModelCatalog.Get(request.Model);
         var provider = GetProvider(descriptor.Provider);
         var messages = new List<ChatMessage>(request.Messages);
         var totalUsage = new TokenUsage();
         var iterations = 0;
         CompletionDiagnostics? finalDiagnostics = null;
+        GroundingResult? grounding = null;
         var baseReq = BuildProviderRequest(request, tools: tools);
 
         while (iterations < maxIterations)
@@ -201,6 +212,7 @@ public sealed class AiInferenceClient : IAiInferenceClient
             var providerReq = baseReq with { Messages = messages };
             var response = await provider.CompleteAsync(providerReq, ct).ConfigureAwait(false);
             totalUsage += response.Usage;
+            grounding = GroundingResult.Combine(grounding, response.Grounding);
 
             if (response.ToolCalls is null or { Count: 0 })
             {
@@ -213,6 +225,7 @@ public sealed class AiInferenceClient : IAiInferenceClient
                     Iterations = iterations,
                     Messages = messages,
                     Diagnostics = finalDiagnostics ?? BuildDiagnostics(descriptor, response),
+                    Grounding = grounding,
                 };
             }
 
@@ -247,11 +260,13 @@ public sealed class AiInferenceClient : IAiInferenceClient
         int maxIterations = 20,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
+        ValidateGroundingRequest(request);
         var provider = GetProvider(request.Model.GetProvider());
         var messages = new List<ChatMessage>(request.Messages);
         var totalUsage = new TokenUsage();
         var iterations = 0;
         var baseReq = BuildProviderRequest(request, tools: tools);
+        GroundingResult? grounding = null;
 
         while (iterations < maxIterations)
         {
@@ -280,6 +295,11 @@ public sealed class AiInferenceClient : IAiInferenceClient
                 {
                     streamUsage = e.Usage;
                 }
+
+                if (e.Grounding is not null)
+                {
+                    grounding = GroundingResult.Combine(grounding, e.Grounding);
+                }
             }
 
             if (streamUsage is not null)
@@ -289,7 +309,7 @@ public sealed class AiInferenceClient : IAiInferenceClient
 
             if (pendingToolCalls.Count == 0)
             {
-                yield return new CompletedEvent(totalUsage);
+                yield return new CompletedEvent(totalUsage, grounding);
                 yield break;
             }
 
@@ -405,7 +425,37 @@ public sealed class AiInferenceClient : IAiInferenceClient
             Tools = CloneTools(tools),
             EnableWebSearch = request.EnableWebSearch,
             EnableXSearch = request.EnableXSearch,
+            Grounding = request.Grounding,
         };
+    }
+
+    private static void ValidateGroundingRequest(CompletionRequest request)
+    {
+        var descriptor = AiModelCatalog.Get(request.Model);
+        var grounding = request.Grounding;
+        var webSearch = request.EnableWebSearch || grounding?.EnableWebSearch == true;
+        var xSearch = request.EnableXSearch || grounding?.EnableXSearch == true;
+
+        if (webSearch && !descriptor.Capabilities.SupportsWebGrounding)
+        {
+            throw new NotSupportedException($"{descriptor.DisplayName} does not support web grounding.");
+        }
+        if (grounding?.EnableImageSearch == true && !descriptor.Capabilities.SupportsImageSearch)
+        {
+            throw new NotSupportedException($"{descriptor.DisplayName} does not support hosted image search.");
+        }
+        if (xSearch && !descriptor.Capabilities.SupportsXSearch)
+        {
+            throw new NotSupportedException($"{descriptor.DisplayName} does not support X search.");
+        }
+        if (grounding is not null && grounding.MaxSearches <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(request), "Grounding MaxSearches must be greater than zero.");
+        }
+        if (grounding?.AllowedDomains is { Count: > 0 } && grounding.BlockedDomains is { Count: > 0 })
+        {
+            throw new ArgumentException("Grounding cannot specify both allowed and blocked domains.", nameof(request));
+        }
     }
 
     private static IReadOnlyList<ChatMessage> CloneMessages(IReadOnlyList<ChatMessage> messages)

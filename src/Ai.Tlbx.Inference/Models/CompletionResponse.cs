@@ -7,4 +7,5 @@ public sealed record CompletionResponse<T>
     public required AiModel Model { get; init; }
     public string? StopReason { get; init; }
     public CompletionDiagnostics? Diagnostics { get; init; }
+    public GroundingResult? Grounding { get; init; }
 }

@@ -217,6 +217,47 @@ public sealed class XaiProviderTests
         Assert.Contains("assistants", uploadBody!, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task CompleteAsync_Grounding_UsesXaiImageAndDomainParameters()
+    {
+        string? capturedBody = null;
+        var provider = new XaiProvider(new ProviderRequestContext
+        {
+            HttpClient = new HttpClient(new MockHttpHandler(async request =>
+            {
+                capturedBody = await request.Content!.ReadAsStringAsync();
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("""
+                    {"status":"completed","output":[{"type":"web_search_call","action":{"type":"search","query":"Starship images"}},{"type":"message","content":[{"type":"output_text","text":"![Starship](https://images.example/starship.jpg)","annotations":[{"type":"url_citation","url":"https://spacex.com","title":"SpaceX","start_index":0,"end_index":10}]}]}],"usage":{"input_tokens":10,"output_tokens":5}}
+                    """, System.Text.Encoding.UTF8, "application/json"),
+                };
+            })),
+            BaseUrl = "https://api.x.ai",
+            ApiKey = "test",
+        });
+
+        var response = await provider.CompleteAsync(new ProviderRequest
+        {
+            ModelApiName = "grok-4",
+            Messages = [new ChatMessage { Role = ChatRole.User, Content = "Show images" }],
+            Grounding = new GroundingOptions
+            {
+                EnableImageSearch = true,
+                BlockedDomains = ["bad.example"]
+            },
+        }, CancellationToken.None);
+
+        using var request = JsonDocument.Parse(capturedBody!);
+        var tool = request.RootElement.GetProperty("tools")[0];
+        Assert.True(tool.GetProperty("enable_image_search").GetBoolean());
+        Assert.Equal("bad.example", tool.GetProperty("filters").GetProperty("excluded_domains")[0].GetString());
+        Assert.False(request.RootElement.TryGetProperty("include", out _));
+        Assert.NotNull(response.Grounding);
+        Assert.Single(response.Grounding!.Sources);
+        Assert.Equal(1, response.Grounding.Usage.WebSearchCalls);
+    }
+
     private static XaiProvider CreateProvider(string responseJson)
     {
         var handler = new MockHttpHandler(async _ =>

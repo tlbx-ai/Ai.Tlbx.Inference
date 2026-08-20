@@ -1,5 +1,19 @@
 # Changelog
 
+## 2.3.0 - 2026-08-20
+
+### Added
+
+- Provider-neutral grounded web, image, and X-search options with domain filters, search limits, and approximate user location.
+- Normalized cited sources, image results, search queries, and billable hosted-tool usage for OpenAI, Anthropic, Google, and xAI.
+- Grounding metadata propagation through typed completions, client tool loops, and tool streaming.
+- Hosted-search list prices and combined token-plus-tool cost calculation in `AiModelCostCatalog`.
+
+### Changed
+
+- Web search now uses each provider's native hosted-search contract instead of requiring every model to expose an OpenAI Responses capability.
+- Existing `EnableWebSearch` and `EnableXSearch` flags remain compatible shorthands for the expanded grounding contract.
+
 ## 2.2.2 - 2026-08-15
 
 ### Fixed

@@ -10,6 +10,8 @@ namespace Ai.Tlbx.Inference.Json;
 [JsonSerializable(typeof(TokenUsage))]
 [JsonSerializable(typeof(TokenCostRates))]
 [JsonSerializable(typeof(TokenCostEstimate))]
+[JsonSerializable(typeof(GroundingOptions))]
+[JsonSerializable(typeof(GroundingResult))]
 [JsonSerializable(typeof(ToolDefinition))]
 [JsonSerializable(typeof(ToolCallRequest))]
 [JsonSerializable(typeof(ToolCallResult))]

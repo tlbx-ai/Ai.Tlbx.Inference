@@ -35,9 +35,14 @@ public static class AiModelValidator
             errors.Add("Structured output is not supported by this model.");
         }
 
-        if ((webSearch || xSearch) && !descriptor.Capabilities.SupportsResponsesApi)
+        if (webSearch && !descriptor.Capabilities.SupportsWebGrounding)
         {
-            errors.Add("Web/X search requires a Responses API-capable model in this library.");
+            errors.Add("Web grounding is not supported by this model.");
+        }
+
+        if (xSearch && !descriptor.Capabilities.SupportsXSearch)
+        {
+            errors.Add("X search is not supported by this model.");
         }
 
         if (descriptor.Capabilities.IsPreview)

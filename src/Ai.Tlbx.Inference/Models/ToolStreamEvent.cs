@@ -8,4 +8,4 @@ public sealed record ToolCallDeltaEvent(string ToolCallId, string Name, string A
 
 public sealed record ToolResultAddedEvent(string ToolCallId, string Result) : ToolStreamEvent;
 
-public sealed record CompletedEvent(TokenUsage Usage) : ToolStreamEvent;
+public sealed record CompletedEvent(TokenUsage Usage, GroundingResult? Grounding = null) : ToolStreamEvent;

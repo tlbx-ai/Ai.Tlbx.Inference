@@ -12,12 +12,12 @@ public sealed class AiModelValidatorTests
     }
 
     [Fact]
-    public void ValidateForCompletion_ErrorsWhenWebSearchNeedsResponsesApi()
+    public void ValidateForCompletion_AllowsProviderNativeWebGrounding()
     {
         var result = AiModelValidator.ValidateForCompletion(AiModel.Grok4, webSearch: true);
 
-        Assert.False(result.IsValid);
-        Assert.Contains(result.Errors, error => error.Contains("Responses API", StringComparison.Ordinal));
+        Assert.True(result.IsValid);
+        Assert.Empty(result.Errors);
     }
 
 }

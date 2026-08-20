@@ -382,6 +382,52 @@ public sealed class AnthropicProviderTests
         Assert.Equal("Hello Claude", string.Concat(chunks));
     }
 
+    [Fact]
+    public async Task CompleteAsync_Grounding_RequestsServerToolAndParsesCitationsAndUsage()
+    {
+        string? capturedBody = null;
+        var responseJson = """
+        {
+          "content":[
+            {"type":"server_tool_use","id":"srv_1","name":"web_search","input":{"query":"Claude Shannon birth"}},
+            {"type":"web_search_tool_result","tool_use_id":"srv_1","content":[{"type":"web_search_result","url":"https://en.wikipedia.org/wiki/Claude_Shannon","title":"Claude Shannon - Wikipedia"}]},
+            {"type":"text","text":"Claude Shannon was born in 1916.","citations":[{"type":"web_search_result_location","url":"https://en.wikipedia.org/wiki/Claude_Shannon","title":"Claude Shannon - Wikipedia","cited_text":"Claude Elwood Shannon"}]}
+          ],
+          "usage":{"input_tokens":100,"output_tokens":30,"server_tool_use":{"web_search_requests":1}},
+          "stop_reason":"end_turn"
+        }
+        """;
+        var provider = new AnthropicProvider(new ProviderRequestContext
+        {
+            HttpClient = new HttpClient(new MockHttpHandler(async request =>
+            {
+                capturedBody = await request.Content!.ReadAsStringAsync();
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(responseJson, System.Text.Encoding.UTF8, "application/json"),
+                };
+            })),
+            BaseUrl = "https://api.anthropic.com",
+            ApiKey = "test",
+        });
+
+        var response = await provider.CompleteAsync(new ProviderRequest
+        {
+            ModelApiName = "claude-opus-4-6",
+            Messages = [new ChatMessage { Role = ChatRole.User, Content = "Suche nach Shannon" }],
+            Grounding = new GroundingOptions { MaxSearches = 4, AllowedDomains = ["wikipedia.org"] },
+        }, CancellationToken.None);
+
+        using var request = JsonDocument.Parse(capturedBody!);
+        var tool = request.RootElement.GetProperty("tools")[0];
+        Assert.Equal("web_search_20250305", tool.GetProperty("type").GetString());
+        Assert.Equal(4, tool.GetProperty("max_uses").GetInt32());
+        Assert.NotNull(response.Grounding);
+        Assert.Single(response.Grounding!.Sources);
+        Assert.Single(response.Grounding.SearchQueries);
+        Assert.Equal(1, response.Grounding.Usage.WebSearchCalls);
+    }
+
     private static AnthropicProvider CreateProvider(string responseJson)
     {
         var handler = new MockHttpHandler(async _ =>

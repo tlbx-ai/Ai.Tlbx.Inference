@@ -94,6 +94,7 @@ internal sealed class GoogleProvider : IProvider
         }
 
         var usage = ParseUsage(root);
+        var grounding = ParseGrounding(root);
 
         return new ProviderResponse
         {
@@ -112,6 +113,7 @@ internal sealed class GoogleProvider : IProvider
                     ? stopForNote.GetString()
                     : null,
                 usage),
+            Grounding = grounding,
         };
     }
 
@@ -191,6 +193,7 @@ internal sealed class GoogleProvider : IProvider
                 yield return new ProviderStreamEvent
                 {
                     Usage = ParseUsageMetadata(usageMeta),
+                    Grounding = ParseGrounding(root),
                 };
             }
         }
@@ -507,6 +510,7 @@ internal sealed class GoogleProvider : IProvider
             body["generationConfig"] = generationConfig;
         }
 
+        var tools = new JsonArray();
         if (request.Tools is { Count: > 0 })
         {
             var declarations = new JsonArray();
@@ -519,7 +523,17 @@ internal sealed class GoogleProvider : IProvider
                     ["parameters"] = JsonNode.Parse(t.ParametersSchema.GetRawText()),
                 });
             }
-            body["tools"] = new JsonArray { (JsonNode)new JsonObject { ["function_declarations"] = declarations } };
+            tools.Add((JsonNode)new JsonObject { ["function_declarations"] = declarations });
+        }
+
+        if (request.EnableWebSearch || request.Grounding?.EnableWebSearch == true)
+        {
+            tools.Add((JsonNode)new JsonObject { ["googleSearch"] = new JsonObject() });
+        }
+
+        if (tools.Count > 0)
+        {
+            body["tools"] = tools;
         }
 
         return body;
@@ -656,6 +670,80 @@ internal sealed class GoogleProvider : IProvider
 
         inlineData = default;
         return false;
+    }
+
+    private static GroundingResult? ParseGrounding(JsonElement root)
+    {
+        if (!root.TryGetProperty("candidates", out var candidates) || candidates.GetArrayLength() == 0 ||
+            !candidates[0].TryGetProperty("groundingMetadata", out var metadata))
+        {
+            return null;
+        }
+
+        var queries = new List<string>();
+        if (metadata.TryGetProperty("webSearchQueries", out var queryArray) && queryArray.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var query in queryArray.EnumerateArray())
+            {
+                if (!string.IsNullOrWhiteSpace(query.GetString())) queries.Add(query.GetString()!);
+            }
+        }
+
+        var sources = new List<GroundingSource>();
+        if (metadata.TryGetProperty("groundingChunks", out var chunks) && chunks.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var chunk in chunks.EnumerateArray())
+            {
+                if (!chunk.TryGetProperty("web", out var web) ||
+                    !web.TryGetProperty("uri", out var uri) || string.IsNullOrWhiteSpace(uri.GetString()))
+                {
+                    continue;
+                }
+
+                sources.Add(new GroundingSource
+                {
+                    Url = uri.GetString()!,
+                    Title = web.TryGetProperty("title", out var title) ? title.GetString() : null,
+                });
+            }
+        }
+
+        var calls = ParseBilledGoogleSearchCalls(root);
+        if (calls == 0)
+        {
+            calls = queries.Where(query => !string.IsNullOrWhiteSpace(query))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Count();
+        }
+
+        if (sources.Count == 0 && queries.Count == 0 && calls == 0) return null;
+        return new GroundingResult
+        {
+            Sources = sources.DistinctBy(source => source.Url, StringComparer.OrdinalIgnoreCase).ToArray(),
+            SearchQueries = queries.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+            Usage = new GroundingUsage { WebSearchCalls = calls },
+        };
+    }
+
+    private static int ParseBilledGoogleSearchCalls(JsonElement root)
+    {
+        if (!root.TryGetProperty("usageMetadata", out var usage) ||
+            !usage.TryGetProperty("billedToolCalls", out var billed) || billed.ValueKind != JsonValueKind.Array)
+        {
+            return 0;
+        }
+
+        var count = 0;
+        foreach (var entry in billed.EnumerateArray())
+        {
+            var tool = entry.TryGetProperty("tool", out var toolEl) ? toolEl.GetString() : null;
+            if (string.Equals(tool, "GOOGLE_SEARCH_RETRIEVAL", StringComparison.OrdinalIgnoreCase) &&
+                entry.TryGetProperty("successfulToolCallCount", out var value))
+            {
+                count += value.GetInt32();
+            }
+        }
+        return count;
     }
 
     private static string? ExtractThoughtSignature(JsonElement part, JsonElement functionCall)

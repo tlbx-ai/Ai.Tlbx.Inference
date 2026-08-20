@@ -590,6 +590,57 @@ public sealed class OpenAiProviderTests
         Assert.Equal("Hello world from completed event", chunks[0]);
     }
 
+    [Fact]
+    public async Task CompleteAsync_Grounding_RequestsImagesAndParsesSourcesUsage()
+    {
+        string? capturedBody = null;
+        var responseJson = """
+        {
+          "output": [
+            {"type":"web_search_call","action":{"type":"image_search","query":"Bauhaus Unterricht Bilder","sources":[{"url":"https://de.wikipedia.org/wiki/Bauhaus","title":"Bauhaus"}]},"results":[{"image_url":"https://images.example/bauhaus.jpg","source_website_url":"https://example.org/bauhaus","thumbnail_url":"https://images.example/thumb.jpg","caption":"Bauhaus building"}]},
+            {"type":"message","content":[{"type":"output_text","text":"Quelle","annotations":[{"type":"url_citation","url":"https://de.wikipedia.org/wiki/Bauhaus","title":"Bauhaus – Wikipedia","start_index":0,"end_index":6}]}]}
+          ],
+          "usage":{"input_tokens":100,"output_tokens":20},
+          "status":"completed"
+        }
+        """;
+        var provider = new OpenAiProvider(new ProviderRequestContext
+        {
+            HttpClient = new HttpClient(new MockHttpHandler(async request =>
+            {
+                capturedBody = await request.Content!.ReadAsStringAsync();
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(responseJson, System.Text.Encoding.UTF8, "application/json"),
+                };
+            })),
+            BaseUrl = "https://api.openai.com",
+            ApiKey = "test",
+        });
+
+        var response = await provider.CompleteAsync(new ProviderRequest
+        {
+            ModelApiName = "gpt-5.6-luna",
+            PreferredEndpoint = ModelEndpointFamily.Responses,
+            Messages = [new ChatMessage { Role = ChatRole.User, Content = "Finde Material" }],
+            Grounding = new GroundingOptions { EnableImageSearch = true, AllowedDomains = ["wikipedia.org"] },
+        }, CancellationToken.None);
+
+        Assert.NotNull(capturedBody);
+        using var request = JsonDocument.Parse(capturedBody!);
+        var tool = request.RootElement.GetProperty("tools")[0];
+        Assert.Equal("web_search", tool.GetProperty("type").GetString());
+        Assert.Contains(tool.GetProperty("search_content_types").EnumerateArray(), value => value.GetString() == "image");
+        Assert.Equal("wikipedia.org", tool.GetProperty("filters").GetProperty("allowed_domains")[0].GetString());
+        Assert.Equal(2, request.RootElement.GetProperty("include").GetArrayLength());
+        Assert.NotNull(response.Grounding);
+        Assert.Single(response.Grounding!.Sources);
+        Assert.Single(response.Grounding.Images);
+        Assert.Equal("Bauhaus – Wikipedia", response.Grounding.Sources[0].Title);
+        Assert.Equal(1, response.Grounding.Usage.ImageSearchCalls);
+        Assert.Equal(0, response.Grounding.Usage.WebSearchCalls);
+    }
+
     private static ProviderRequest BuildSimpleRequest(string model = "gpt-5.2") => new()
     {
         ModelApiName = model,

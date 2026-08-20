@@ -25,6 +25,7 @@ internal sealed record ProviderRequest
     public IReadOnlyList<ToolDefinition>? Tools { get; init; }
     public bool EnableWebSearch { get; init; }
     public bool EnableXSearch { get; init; }
+    public GroundingOptions? Grounding { get; init; }
 }
 
 internal sealed record ProviderResponse
@@ -35,6 +36,7 @@ internal sealed record ProviderResponse
     public string? StopReason { get; init; }
     public IReadOnlyList<ToolCallRequest>? ToolCalls { get; init; }
     public string? DiagnosticNote { get; init; }
+    public GroundingResult? Grounding { get; init; }
 }
 
 internal sealed record ProviderStreamEvent
@@ -42,6 +44,7 @@ internal sealed record ProviderStreamEvent
     public string? TextDelta { get; init; }
     public ToolCallRequest? ToolCall { get; init; }
     public TokenUsage? Usage { get; init; }
+    public GroundingResult? Grounding { get; init; }
 }
 
 internal sealed record ProviderEmbeddingRequest

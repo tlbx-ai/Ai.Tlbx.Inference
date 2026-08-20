@@ -56,6 +56,20 @@ public sealed class TokenCostCalculatorTests
     }
 
     [Fact]
+    public void Estimate_WithGrounding_AddsHostedToolCostExactlyOnce()
+    {
+        var usage = new TokenUsage { InputTokens = 1_000, OutputTokens = 500 };
+        var grounding = new GroundingUsage { WebSearchCalls = 2, ImageSearchCalls = 1 };
+
+        var estimate = usage.EstimateCost(grounding, AiModel.Gpt56Luna);
+        var tokenOnly = usage.EstimateCost(AiModel.Gpt56Luna);
+
+        Assert.Equal(0.03m, estimate.HostedToolCost);
+        Assert.Equal(tokenOnly.ProviderCost + 0.03m, estimate.ProviderCost);
+        Assert.Equal(grounding, estimate.GroundingUsage);
+    }
+
+    [Fact]
     public void AllAiModels_HaveCostRates()
     {
         foreach (var model in Enum.GetValues<AiModel>())

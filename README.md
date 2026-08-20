@@ -16,6 +16,7 @@ Trim-friendly .NET AI inference client for OpenAI, Anthropic, Google, and xAI, b
 - **Embeddings** — OpenAI and Google embedding models with batch support
 - **Image generation** — Google Gemini image generation via `gemini-2.5-flash-image`
 - **Token metering** — `TokenUsage` on every response, with reasoning retained as a diagnostic subset of billed output tokens
+- **Grounded search** — provider-native web/X/image search with normalized citations, images, search queries, and billable tool usage
 - **Resilience** — Polly v8 retry and timeout handling wired into provider HTTP execution
 - **Thinking budget** — universal mapping across all providers that support reasoning
 - **Diagnostics** — `CompletionDiagnostics` exposes endpoint family, stop reason, and truncation hints
@@ -126,6 +127,43 @@ await foreach (var delta in client.StreamAsync(new CompletionRequest
     Console.Write(delta);
 }
 ```
+
+### Grounded web and image search
+
+```csharp
+var response = await client.CompleteAsync(new CompletionRequest
+{
+    Model = AiModel.Gpt56Luna,
+    Messages =
+    [
+        new ChatMessage
+        {
+            Role = ChatRole.User,
+            Content = "Find current Bauhaus references and a suitable lesson image. Cite every source."
+        }
+    ],
+    Grounding = new GroundingOptions
+    {
+        EnableImageSearch = true,
+        MaxSearches = 3,
+        AllowedDomains = ["wikipedia.org", "bauhaus-dessau.de"]
+    }
+});
+
+foreach (var source in response.Grounding?.Sources ?? [])
+{
+    Console.WriteLine($"{source.Title}: {source.Url}");
+}
+
+var cost = response.Usage.EstimateCost(
+    response.Grounding?.Usage ?? new GroundingUsage(),
+    response.Model);
+Console.WriteLine($"Tokens + hosted search: {cost.ProviderCost} {cost.Currency}");
+```
+
+`GroundingOptions` enables hosted search as an optional model tool: the model decides whether the request needs it. OpenAI and xAI also support `EnableImageSearch`; xAI supports `EnableXSearch`. Google and Anthropic normalize their cited web results into the same `GroundingResult`. The legacy `EnableWebSearch` and `EnableXSearch` request flags remain supported as simple shorthands.
+
+`GroundingResult` is preserved by ordinary completions, typed completions, tool loops, and the final `CompletedEvent` from tool streaming. `GroundingUsage` contains the provider-reported or protocol-derived billable search counts. The model cost catalog includes current hosted-tool list rates so search costs can be added to token costs without guessing from answer text.
 
 ### Structured Output
 

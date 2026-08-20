@@ -169,6 +169,7 @@ internal abstract class OpenAiCompatibleProvider : IProvider
             var usage = root.TryGetProperty("usage", out var usageEl)
                 ? ParseResponsesUsage(usageEl)
                 : new TokenUsage();
+            var grounding = ParseResponsesGrounding(root, request);
 
             return new ProviderResponse
             {
@@ -178,6 +179,7 @@ internal abstract class OpenAiCompatibleProvider : IProvider
                 StopReason = stopReason,
                 ToolCalls = toolCalls,
                 DiagnosticNote = BuildResponsesDiagnosticNote(contentBuilder.ToString(), stopReason, usage),
+                Grounding = grounding,
             };
         }
         finally
@@ -306,6 +308,14 @@ internal abstract class OpenAiCompatibleProvider : IProvider
                                 yield return new ProviderStreamEvent
                                 {
                                     Usage = ParseResponsesUsage(usageEl),
+                                    Grounding = ParseResponsesGrounding(resp, request),
+                                };
+                            }
+                            else
+                            {
+                                yield return new ProviderStreamEvent
+                                {
+                                    Grounding = ParseResponsesGrounding(resp, request),
                                 };
                             }
                         }
@@ -726,9 +736,52 @@ internal abstract class OpenAiCompatibleProvider : IProvider
             }
         }
 
-        if (request.EnableWebSearch)
-            tools.Add((JsonNode)new JsonObject { ["type"] = "web_search" });
-        if (request.EnableXSearch)
+        var grounding = request.Grounding;
+        var enableWebSearch = request.EnableWebSearch || grounding?.EnableWebSearch == true;
+        var enableXSearch = request.EnableXSearch || grounding?.EnableXSearch == true;
+
+        if (enableWebSearch)
+        {
+            var webSearch = new JsonObject { ["type"] = "web_search" };
+            if (grounding is not null)
+            {
+                if (IsXai)
+                {
+                    if (grounding.EnableImageSearch)
+                    {
+                        webSearch["enable_image_search"] = true;
+                    }
+
+                    var filters = BuildXaiSearchFilters(grounding);
+                    if (filters.Count > 0)
+                    {
+                        webSearch["filters"] = filters;
+                    }
+                }
+                else
+                {
+                    if (grounding.EnableImageSearch)
+                    {
+                        webSearch["search_content_types"] = new JsonArray("text", "image");
+                        webSearch["image_settings"] = new JsonObject
+                        {
+                            ["max_results"] = Math.Clamp(grounding.MaxSearches, 1, 10),
+                            ["caption"] = true,
+                        };
+                    }
+
+                    if (grounding.AllowedDomains is { Count: > 0 })
+                    {
+                        webSearch["filters"] = new JsonObject
+                        {
+                            ["allowed_domains"] = ToJsonArray(grounding.AllowedDomains),
+                        };
+                    }
+                }
+            }
+            tools.Add((JsonNode)webSearch);
+        }
+        if (enableXSearch)
             tools.Add((JsonNode)new JsonObject { ["type"] = "x_search" });
 
         var body = new JsonObject
@@ -741,6 +794,16 @@ internal abstract class OpenAiCompatibleProvider : IProvider
 
         if (tools.Count > 0)
             body["tools"] = tools;
+
+        if (enableWebSearch && !IsXai)
+        {
+            var include = new JsonArray("web_search_call.action.sources");
+            if (grounding?.EnableImageSearch == true)
+            {
+                include.Add((JsonNode)JsonValue.Create("web_search_call.results")!);
+            }
+            body["include"] = include;
+        }
 
         if (request.Temperature.HasValue)
             body["temperature"] = request.Temperature.Value;
@@ -764,7 +827,7 @@ internal abstract class OpenAiCompatibleProvider : IProvider
 
     private static bool UseResponsesApiForRequest(ProviderRequest request)
     {
-        if (request.EnableWebSearch || request.EnableXSearch)
+        if (request.EnableWebSearch || request.EnableXSearch || request.Grounding is not null)
         {
             return true;
         }
@@ -803,6 +866,195 @@ internal abstract class OpenAiCompatibleProvider : IProvider
             CacheReadTokens = cacheReadTokens,
             ThinkingTokens = thinkingTokens,
         };
+    }
+
+    private bool IsXai => _context.BaseUrl.Contains("api.x.ai", StringComparison.OrdinalIgnoreCase);
+
+    private static JsonObject BuildXaiSearchFilters(GroundingOptions grounding)
+    {
+        var filters = new JsonObject();
+        if (grounding.AllowedDomains is { Count: > 0 })
+        {
+            filters["allowed_domains"] = ToJsonArray(grounding.AllowedDomains.Take(5));
+        }
+        else if (grounding.BlockedDomains is { Count: > 0 })
+        {
+            filters["excluded_domains"] = ToJsonArray(grounding.BlockedDomains.Take(5));
+        }
+        return filters;
+    }
+
+    private static JsonArray ToJsonArray(IEnumerable<string> values)
+    {
+        var result = new JsonArray();
+        foreach (var value in values.Where(value => !string.IsNullOrWhiteSpace(value)))
+        {
+            result.Add((JsonNode)JsonValue.Create(value.Trim())!);
+        }
+        return result;
+    }
+
+    private static GroundingResult? ParseResponsesGrounding(JsonElement root, ProviderRequest request)
+    {
+        var sources = new List<GroundingSource>();
+        var images = new List<GroundingImage>();
+        var queries = new List<string>();
+        var webCalls = 0;
+        var imageCalls = 0;
+        var xCalls = 0;
+
+        if (root.TryGetProperty("output", out var output) && output.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in output.EnumerateArray())
+            {
+                var type = item.TryGetProperty("type", out var typeEl) ? typeEl.GetString() : null;
+                if (type == "message" && item.TryGetProperty("content", out var content))
+                {
+                    foreach (var block in content.EnumerateArray())
+                    {
+                        ParseUrlCitations(block, sources);
+                    }
+                    continue;
+                }
+
+                if (type == "x_search_call")
+                {
+                    xCalls++;
+                    ParseSearchAction(item, sources, images, queries);
+                    continue;
+                }
+
+                if (type == "web_search_call")
+                {
+                    var beforeImages = images.Count;
+                    ParseSearchAction(item, sources, images, queries);
+                    var imageSearch = images.Count > beforeImages && request.Grounding?.EnableImageSearch == true;
+                    if (item.TryGetProperty("action", out var action) &&
+                        action.TryGetProperty("type", out var actionType) &&
+                        string.Equals(actionType.GetString(), "image_search", StringComparison.OrdinalIgnoreCase))
+                    {
+                        imageSearch = true;
+                    }
+                    if (imageSearch) imageCalls++; else webCalls++;
+                }
+            }
+        }
+
+        if (root.TryGetProperty("citations", out var citations) && citations.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var citation in citations.EnumerateArray())
+            {
+                var url = citation.ValueKind == JsonValueKind.String
+                    ? citation.GetString()
+                    : citation.TryGetProperty("url", out var urlEl) ? urlEl.GetString() : null;
+                if (!string.IsNullOrWhiteSpace(url))
+                {
+                    sources.Add(new GroundingSource { Url = url! });
+                }
+            }
+        }
+
+        if (sources.Count == 0 && images.Count == 0 && queries.Count == 0 && webCalls == 0 && imageCalls == 0 && xCalls == 0)
+        {
+            return null;
+        }
+
+        return new GroundingResult
+        {
+            Sources = sources.GroupBy(source => source.Url, StringComparer.OrdinalIgnoreCase)
+                .Select(group => group.Last())
+                .ToArray(),
+            Images = images.DistinctBy(image => image.Url, StringComparer.OrdinalIgnoreCase).ToArray(),
+            SearchQueries = queries.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+            Usage = new GroundingUsage
+            {
+                WebSearchCalls = webCalls,
+                ImageSearchCalls = imageCalls,
+                XSearchCalls = xCalls,
+            },
+        };
+    }
+
+    private static void ParseUrlCitations(JsonElement block, List<GroundingSource> sources)
+    {
+        if (!block.TryGetProperty("annotations", out var annotations) || annotations.ValueKind != JsonValueKind.Array)
+        {
+            return;
+        }
+
+        foreach (var annotation in annotations.EnumerateArray())
+        {
+            if (!annotation.TryGetProperty("type", out var type) || type.GetString() != "url_citation" ||
+                !annotation.TryGetProperty("url", out var url) || string.IsNullOrWhiteSpace(url.GetString()))
+            {
+                continue;
+            }
+
+            sources.Add(new GroundingSource
+            {
+                Url = url.GetString()!,
+                Title = annotation.TryGetProperty("title", out var title) ? title.GetString() : null,
+                StartIndex = annotation.TryGetProperty("start_index", out var start) ? start.GetInt32() : null,
+                EndIndex = annotation.TryGetProperty("end_index", out var end) ? end.GetInt32() : null,
+            });
+        }
+    }
+
+    private static void ParseSearchAction(
+        JsonElement item,
+        List<GroundingSource> sources,
+        List<GroundingImage> images,
+        List<string> queries)
+    {
+        if (item.TryGetProperty("action", out var action))
+        {
+            if (action.TryGetProperty("query", out var query) && !string.IsNullOrWhiteSpace(query.GetString()))
+            {
+                queries.Add(query.GetString()!);
+            }
+            if (action.TryGetProperty("queries", out var queryArray) && queryArray.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var value in queryArray.EnumerateArray())
+                {
+                    if (!string.IsNullOrWhiteSpace(value.GetString())) queries.Add(value.GetString()!);
+                }
+            }
+            ParseSourceArray(action, "sources", sources);
+        }
+
+        ParseSourceArray(item, "sources", sources);
+        if (item.TryGetProperty("results", out var results) && results.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var result in results.EnumerateArray())
+            {
+                var imageUrl = result.TryGetProperty("image_url", out var imageUrlEl) ? imageUrlEl.GetString() : null;
+                if (!string.IsNullOrWhiteSpace(imageUrl))
+                {
+                    images.Add(new GroundingImage
+                    {
+                        Url = imageUrl!,
+                        SourceUrl = result.TryGetProperty("source_website_url", out var sourceUrl) ? sourceUrl.GetString() : null,
+                        ThumbnailUrl = result.TryGetProperty("thumbnail_url", out var thumbnail) ? thumbnail.GetString() : null,
+                        Caption = result.TryGetProperty("caption", out var caption) ? caption.GetString() : null,
+                    });
+                }
+            }
+        }
+    }
+
+    private static void ParseSourceArray(JsonElement parent, string propertyName, List<GroundingSource> sources)
+    {
+        if (!parent.TryGetProperty(propertyName, out var array) || array.ValueKind != JsonValueKind.Array) return;
+        foreach (var source in array.EnumerateArray())
+        {
+            var url = source.TryGetProperty("url", out var urlEl) ? urlEl.GetString() : null;
+            if (string.IsNullOrWhiteSpace(url)) continue;
+            sources.Add(new GroundingSource
+            {
+                Url = url!,
+                Title = source.TryGetProperty("title", out var title) ? title.GetString() : null,
+            });
+        }
     }
 
     private static string ExtractResponsesOutputText(JsonElement response)

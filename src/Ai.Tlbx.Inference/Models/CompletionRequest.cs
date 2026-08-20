@@ -14,4 +14,5 @@ public sealed record CompletionRequest
     public IReadOnlyList<string>? StopSequences { get; init; }
     public bool EnableWebSearch { get; init; }
     public bool EnableXSearch { get; init; }
+    public GroundingOptions? Grounding { get; init; }
 }

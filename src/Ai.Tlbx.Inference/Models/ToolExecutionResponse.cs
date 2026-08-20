@@ -7,4 +7,5 @@ public sealed record ToolExecutionResponse<T>
     public required int Iterations { get; init; }
     public required IReadOnlyList<ChatMessage> Messages { get; init; }
     public CompletionDiagnostics? Diagnostics { get; init; }
+    public GroundingResult? Grounding { get; init; }
 }

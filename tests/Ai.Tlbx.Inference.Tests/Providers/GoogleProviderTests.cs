@@ -395,6 +395,51 @@ public sealed class GoogleProviderTests
         Assert.Equal("IMAGE", responseModalities[0].GetString());
     }
 
+    [Fact]
+    public async Task CompleteAsync_Grounding_RequestsGoogleSearchAndParsesBilledQueries()
+    {
+        string? capturedBody = null;
+        var responseJson = """
+        {
+          "candidates":[{
+            "content":{"parts":[{"text":"Aktuelle Antwort"}]},
+            "groundingMetadata":{
+              "webSearchQueries":["aktuelle bildung nachrichten","bildung 2026"],
+              "groundingChunks":[{"web":{"uri":"https://example.org/current","title":"Current source"}}]
+            }
+          }],
+          "usageMetadata":{"promptTokenCount":20,"candidatesTokenCount":10,"billedToolCalls":[{"tool":"GOOGLE_SEARCH_RETRIEVAL","successfulToolCallCount":2}]}
+        }
+        """;
+        var provider = new GoogleProvider(new ProviderRequestContext
+        {
+            HttpClient = new HttpClient(new MockHttpHandler(async request =>
+            {
+                capturedBody = await request.Content!.ReadAsStringAsync();
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(responseJson, System.Text.Encoding.UTF8, "application/json"),
+                };
+            })),
+            BaseUrl = "https://generativelanguage.googleapis.com",
+            ApiKey = "test",
+        });
+
+        var response = await provider.CompleteAsync(new ProviderRequest
+        {
+            ModelApiName = "gemini-3.5-flash",
+            Messages = [new ChatMessage { Role = ChatRole.User, Content = "Was ist aktuell?" }],
+            Grounding = new GroundingOptions(),
+        }, CancellationToken.None);
+
+        using var request = JsonDocument.Parse(capturedBody!);
+        Assert.True(request.RootElement.GetProperty("tools")[0].TryGetProperty("googleSearch", out _));
+        Assert.NotNull(response.Grounding);
+        Assert.Equal(2, response.Grounding!.SearchQueries.Count);
+        Assert.Single(response.Grounding.Sources);
+        Assert.Equal(2, response.Grounding.Usage.WebSearchCalls);
+    }
+
     private static GoogleProvider CreateProvider(string responseJson)
     {
         var handler = new MockHttpHandler(async _ =>

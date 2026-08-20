@@ -71,6 +71,7 @@ internal sealed class AnthropicProvider : IProvider
             : null;
 
         var usage = ParseUsage(root.GetProperty("usage"));
+        var grounding = ParseGrounding(root);
 
         return new ProviderResponse
         {
@@ -80,6 +81,7 @@ internal sealed class AnthropicProvider : IProvider
             StopReason = stopReason,
             ToolCalls = toolCalls,
             DiagnosticNote = BuildDiagnosticNote(contentBuilder.ToString(), stopReason),
+            Grounding = grounding,
         };
     }
 
@@ -114,6 +116,9 @@ internal sealed class AnthropicProvider : IProvider
         string? currentToolName = null;
         var toolArgsBuilder = new StringBuilder();
         var accumulatedUsage = new TokenUsage();
+        var groundingSources = new List<GroundingSource>();
+        var groundingQueries = new List<string>();
+        var webSearchCalls = 0;
 
         string? line;
         while ((line = await reader.ReadLineAsync(ct).ConfigureAwait(false)) is not null)
@@ -126,7 +131,15 @@ internal sealed class AnthropicProvider : IProvider
 
                 if (eventType == "message_stop")
                 {
-                    yield return new ProviderStreamEvent { Usage = accumulatedUsage };
+                    var grounding = groundingSources.Count == 0 && groundingQueries.Count == 0 && webSearchCalls == 0
+                        ? null
+                        : new GroundingResult
+                        {
+                            Sources = groundingSources.DistinctBy(source => source.Url, StringComparer.OrdinalIgnoreCase).ToArray(),
+                            SearchQueries = groundingQueries.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+                            Usage = new GroundingUsage { WebSearchCalls = webSearchCalls },
+                        };
+                    yield return new ProviderStreamEvent { Usage = accumulatedUsage, Grounding = grounding };
                     yield break;
                 }
 
@@ -164,6 +177,7 @@ internal sealed class AnthropicProvider : IProvider
                             CacheReadTokens = cacheRead,
                             CacheWriteTokens = cacheWrite,
                         };
+                        webSearchCalls = ParseWebSearchRequestCount(usageEl);
                     }
                     break;
                 }
@@ -179,6 +193,17 @@ internal sealed class AnthropicProvider : IProvider
                             currentToolId = block.GetProperty("id").GetString();
                             currentToolName = block.GetProperty("name").GetString();
                             toolArgsBuilder.Clear();
+                        }
+                        else if (currentBlockType == "web_search_tool_result")
+                        {
+                            ParseAnthropicSearchResults(block, groundingSources);
+                        }
+                        else if (currentBlockType == "server_tool_use" &&
+                                 block.TryGetProperty("name", out var serverName) && serverName.GetString() == "web_search" &&
+                                 block.TryGetProperty("input", out var input) && input.TryGetProperty("query", out var query) &&
+                                 !string.IsNullOrWhiteSpace(query.GetString()))
+                        {
+                            groundingQueries.Add(query.GetString()!);
                         }
                     }
                     break;
@@ -243,6 +268,7 @@ internal sealed class AnthropicProvider : IProvider
                         {
                             OutputTokens = outputTokens,
                         };
+                        webSearchCalls = Math.Max(webSearchCalls, ParseWebSearchRequestCount(usageEl));
                     }
                     break;
                 }
@@ -408,9 +434,38 @@ internal sealed class AnthropicProvider : IProvider
             }
         }
 
+        var toolsArray = new JsonArray();
+        if (request.EnableWebSearch || request.Grounding?.EnableWebSearch == true)
+        {
+            var grounding = request.Grounding;
+            var webSearch = new JsonObject
+            {
+                ["type"] = "web_search_20250305",
+                ["name"] = "web_search",
+                ["max_uses"] = Math.Clamp(grounding?.MaxSearches ?? 3, 1, 20),
+            };
+            if (grounding?.AllowedDomains is { Count: > 0 })
+            {
+                webSearch["allowed_domains"] = ToJsonArray(grounding.AllowedDomains);
+            }
+            else if (grounding?.BlockedDomains is { Count: > 0 })
+            {
+                webSearch["blocked_domains"] = ToJsonArray(grounding.BlockedDomains);
+            }
+            if (grounding?.UserLocation is { } location)
+            {
+                var userLocation = new JsonObject { ["type"] = "approximate" };
+                if (!string.IsNullOrWhiteSpace(location.City)) userLocation["city"] = location.City;
+                if (!string.IsNullOrWhiteSpace(location.Region)) userLocation["region"] = location.Region;
+                if (!string.IsNullOrWhiteSpace(location.Country)) userLocation["country"] = location.Country;
+                if (!string.IsNullOrWhiteSpace(location.Timezone)) userLocation["timezone"] = location.Timezone;
+                webSearch["user_location"] = userLocation;
+            }
+            toolsArray.Add((JsonNode)webSearch);
+        }
+
         if (request.Tools is { Count: > 0 })
         {
-            var toolsArray = new JsonArray();
             foreach (var t in request.Tools)
             {
                 toolsArray.Add((JsonNode)new JsonObject
@@ -420,8 +475,9 @@ internal sealed class AnthropicProvider : IProvider
                     ["input_schema"] = JsonNode.Parse(t.ParametersSchema.GetRawText()),
                 });
             }
-            body["tools"] = toolsArray;
         }
+
+        if (toolsArray.Count > 0) body["tools"] = toolsArray;
 
         if (request.JsonSchema is not null)
         {
@@ -481,6 +537,83 @@ internal sealed class AnthropicProvider : IProvider
             CacheReadTokens = cacheRead,
             CacheWriteTokens = cacheWrite,
         };
+    }
+
+    private static GroundingResult? ParseGrounding(JsonElement root)
+    {
+        var sources = new List<GroundingSource>();
+        var queries = new List<string>();
+        if (root.TryGetProperty("content", out var content) && content.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var block in content.EnumerateArray())
+            {
+                var type = block.TryGetProperty("type", out var typeEl) ? typeEl.GetString() : null;
+                if (type == "text" && block.TryGetProperty("citations", out var citations) && citations.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var citation in citations.EnumerateArray())
+                    {
+                        var url = citation.TryGetProperty("url", out var urlEl) ? urlEl.GetString() : null;
+                        if (string.IsNullOrWhiteSpace(url)) continue;
+                        sources.Add(new GroundingSource
+                        {
+                            Url = url!,
+                            Title = citation.TryGetProperty("title", out var title) ? title.GetString() : null,
+                            CitedText = citation.TryGetProperty("cited_text", out var cited) ? cited.GetString() : null,
+                        });
+                    }
+                }
+                else if (type == "web_search_tool_result")
+                {
+                    ParseAnthropicSearchResults(block, sources);
+                }
+                else if (type == "server_tool_use" && block.TryGetProperty("name", out var name) &&
+                         name.GetString() == "web_search" && block.TryGetProperty("input", out var input) &&
+                         input.TryGetProperty("query", out var query) && !string.IsNullOrWhiteSpace(query.GetString()))
+                {
+                    queries.Add(query.GetString()!);
+                }
+            }
+        }
+
+        var calls = root.TryGetProperty("usage", out var usage) ? ParseWebSearchRequestCount(usage) : 0;
+        if (sources.Count == 0 && queries.Count == 0 && calls == 0) return null;
+        return new GroundingResult
+        {
+            Sources = sources.DistinctBy(source => source.Url, StringComparer.OrdinalIgnoreCase).ToArray(),
+            SearchQueries = queries.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+            Usage = new GroundingUsage { WebSearchCalls = calls },
+        };
+    }
+
+    private static void ParseAnthropicSearchResults(JsonElement block, List<GroundingSource> sources)
+    {
+        if (!block.TryGetProperty("content", out var results) || results.ValueKind != JsonValueKind.Array) return;
+        foreach (var result in results.EnumerateArray())
+        {
+            var url = result.TryGetProperty("url", out var urlEl) ? urlEl.GetString() : null;
+            if (string.IsNullOrWhiteSpace(url)) continue;
+            sources.Add(new GroundingSource
+            {
+                Url = url!,
+                Title = result.TryGetProperty("title", out var title) ? title.GetString() : null,
+            });
+        }
+    }
+
+    private static int ParseWebSearchRequestCount(JsonElement usage)
+        => usage.TryGetProperty("server_tool_use", out var serverTools) &&
+           serverTools.TryGetProperty("web_search_requests", out var count)
+            ? count.GetInt32()
+            : 0;
+
+    private static JsonArray ToJsonArray(IEnumerable<string> values)
+    {
+        var array = new JsonArray();
+        foreach (var value in values.Where(value => !string.IsNullOrWhiteSpace(value)))
+        {
+            array.Add((JsonNode)JsonValue.Create(value.Trim())!);
+        }
+        return array;
     }
 
     private static string? BuildDiagnosticNote(string content, string? stopReason)

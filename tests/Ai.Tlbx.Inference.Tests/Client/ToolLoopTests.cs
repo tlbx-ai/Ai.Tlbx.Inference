@@ -231,6 +231,50 @@ public sealed class ToolLoopTests
         Assert.Equal(22, result.Content.Temperature);
     }
 
+    [Fact]
+    public async Task CompleteWithToolsAsync_AccumulatesGroundingAcrossIterations()
+    {
+        var callCount = 0;
+        var handler = new MockHttpHandler(async _ =>
+        {
+            callCount++;
+            await Task.CompletedTask;
+            var json = callCount == 1
+                ? """
+                  {"status":"completed","output":[
+                    {"type":"web_search_call","action":{"type":"search","query":"London weather","sources":[{"url":"https://weather.example/london","title":"London"}]}},
+                    {"type":"function_call","id":"fc_1","call_id":"call_1","name":"get_weather","arguments":"{\"city\":\"London\"}"}
+                  ],"usage":{"input_tokens":10,"output_tokens":5}}
+                  """
+                : """
+                  {"status":"completed","output":[
+                    {"type":"web_search_call","action":{"type":"search","query":"Paris weather","sources":[{"url":"https://weather.example/paris","title":"Paris"}]}},
+                    {"type":"message","content":[{"type":"output_text","text":"Done"}]}
+                  ],"usage":{"input_tokens":20,"output_tokens":10}}
+                  """;
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(json, System.Text.Encoding.UTF8, "application/json"),
+            };
+        });
+        var client = CreateClient(handler);
+
+        var result = await client.CompleteWithToolsAsync(
+            new CompletionRequest
+            {
+                Model = AiModel.Gpt52,
+                Messages = [new ChatMessage { Role = ChatRole.User, Content = "Compare weather" }],
+                Grounding = new GroundingOptions(),
+            },
+            _testTools,
+            call => Task.FromResult(new ToolCallResult { ToolCallId = call.Id, Result = "sunny" }));
+
+        Assert.NotNull(result.Grounding);
+        Assert.Equal(2, result.Grounding!.Sources.Count);
+        Assert.Equal(2, result.Grounding.Usage.WebSearchCalls);
+        Assert.Equal(2, result.Iterations);
+    }
+
     private static AiInferenceClient CreateClient(MockHttpHandler handler)
     {
         var httpClient = new HttpClient(handler);

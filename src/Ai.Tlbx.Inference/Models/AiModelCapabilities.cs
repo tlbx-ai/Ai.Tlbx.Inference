@@ -9,6 +9,9 @@ public sealed record AiModelCapabilities
     public required bool SupportsDocumentAttachments { get; init; }
     public required bool SupportsChatCompletionsApi { get; init; }
     public required bool SupportsResponsesApi { get; init; }
+    public required bool SupportsWebGrounding { get; init; }
+    public required bool SupportsImageSearch { get; init; }
+    public required bool SupportsXSearch { get; init; }
     public required bool IsPreview { get; init; }
     public required bool RequiresReasoningBudgetHeadroom { get; init; }
     public required int DefaultSmokeMaxTokens { get; init; }
