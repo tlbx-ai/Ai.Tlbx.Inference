@@ -147,7 +147,7 @@ public sealed class AiInferenceClient : IAiInferenceClient
         {
             iterations++;
             var providerReq = baseReq with { Messages = messages };
-            var response = await provider.CompleteAsync(providerReq, ct).ConfigureAwait(false);
+            var response = await CompleteToolIterationAsync(provider, providerReq, request, iterations, ct).ConfigureAwait(false);
             totalUsage += response.Usage;
             grounding = GroundingResult.Combine(grounding, response.Grounding);
 
@@ -210,7 +210,7 @@ public sealed class AiInferenceClient : IAiInferenceClient
         {
             iterations++;
             var providerReq = baseReq with { Messages = messages };
-            var response = await provider.CompleteAsync(providerReq, ct).ConfigureAwait(false);
+            var response = await CompleteToolIterationAsync(provider, providerReq, request, iterations, ct).ConfigureAwait(false);
             totalUsage += response.Usage;
             grounding = GroundingResult.Combine(grounding, response.Grounding);
 
@@ -277,7 +277,7 @@ public sealed class AiInferenceClient : IAiInferenceClient
             var contentBuilder = new System.Text.StringBuilder();
             TokenUsage? streamUsage = null;
 
-            await foreach (var e in provider.StreamAsync(providerReq, ct).ConfigureAwait(false))
+            await foreach (var e in StreamToolIterationAsync(provider, providerReq, request, iterations, ct).ConfigureAwait(false))
             {
                 if (e.TextDelta is not null)
                 {
@@ -335,6 +335,83 @@ public sealed class AiInferenceClient : IAiInferenceClient
         }
 
         throw new InvalidOperationException($"Tool execution exceeded {maxIterations} iterations");
+    }
+
+    private static ToolIterationRequest CreateIterationRequest(
+        CompletionRequest request, ProviderRequest providerRequest, int iteration) => new()
+    {
+        Iteration = iteration,
+        Request = request with { Messages = providerRequest.Messages.ToArray(), ToolIterationObserver = null },
+        Tools = providerRequest.Tools?.ToArray() ?? [],
+    };
+
+    private static async Task<ProviderResponse> CompleteToolIterationAsync(
+        IProvider provider, ProviderRequest providerRequest, CompletionRequest request, int iteration, CancellationToken ct)
+    {
+        var observer = request.ToolIterationObserver;
+        if (observer is null)
+        {
+            return await provider.CompleteAsync(providerRequest, ct).ConfigureAwait(false);
+        }
+
+        await observer.OnStartingAsync(CreateIterationRequest(request, providerRequest, iteration), ct).ConfigureAwait(false);
+        ProviderResponse? response = null;
+        try
+        {
+            response = await provider.CompleteAsync(providerRequest, ct).ConfigureAwait(false);
+            return response;
+        }
+        finally
+        {
+            await observer.OnFinishedAsync(new ToolIterationResult
+            {
+                Iteration = iteration,
+                Usage = response?.Usage,
+                Grounding = response?.Grounding,
+                ResponseCompleted = response is not null,
+            }).ConfigureAwait(false);
+        }
+    }
+
+    private static async IAsyncEnumerable<ProviderStreamEvent> StreamToolIterationAsync(
+        IProvider provider, ProviderRequest providerRequest, CompletionRequest request, int iteration,
+        [EnumeratorCancellation] CancellationToken ct)
+    {
+        var observer = request.ToolIterationObserver;
+        if (observer is not null)
+        {
+            await observer.OnStartingAsync(CreateIterationRequest(request, providerRequest, iteration), ct).ConfigureAwait(false);
+        }
+
+        TokenUsage? usage = null;
+        GroundingResult? grounding = null;
+        var responseCompleted = false;
+        try
+        {
+            await foreach (var item in provider.StreamAsync(providerRequest, ct).ConfigureAwait(false))
+            {
+                if (observer is not null)
+                {
+                    usage = item.Usage ?? usage;
+                    grounding = GroundingResult.Combine(grounding, item.Grounding);
+                }
+                yield return item;
+            }
+            responseCompleted = true;
+        }
+        finally
+        {
+            if (observer is not null)
+            {
+                await observer.OnFinishedAsync(new ToolIterationResult
+                {
+                    Iteration = iteration,
+                    Usage = usage,
+                    Grounding = grounding,
+                    ResponseCompleted = responseCompleted,
+                }).ConfigureAwait(false);
+            }
+        }
     }
 
     public async Task<EmbeddingResponse> EmbedAsync(EmbeddingRequest request, CancellationToken ct = default)

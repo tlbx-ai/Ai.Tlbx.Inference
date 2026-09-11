@@ -10,7 +10,7 @@
     <RepositoryType>git</RepositoryType>
     <PackageTags>ai;inference;openai;anthropic;google;gemini;xai;grok;llm;embeddings;tool-calling;streaming;attachments;aot;trimming</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>
-    <PackageReleaseNotes>2.2.2: add GPT-5.6 Luna metadata and pricing; route Luna reasoning and tool loops through the Responses API; preserve Responses function-item identifiers; and prevent reasoning-token double counting.</PackageReleaseNotes>
+    <PackageReleaseNotes>Add optional per-provider-call accounting in typed, untyped and streaming tool dialogs, preserving reported usage on later failure or cancellation. Use the serviced SDK's built-in SourceLink instead of the vulnerable legacy package.</PackageReleaseNotes>
     <PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <NoWarn>CS1591</NoWarn>
@@ -28,6 +28,5 @@
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="9.0.*" />
     <PackageReference Include="Microsoft.Extensions.Http" Version="9.0.*" />
     <PackageReference Include="Polly.Core" Version="8.*" />
-    <PackageReference Include="Microsoft.SourceLink.GitHub" Version="8.*" PrivateAssets="All" />
   </ItemGroup>
 </Project>

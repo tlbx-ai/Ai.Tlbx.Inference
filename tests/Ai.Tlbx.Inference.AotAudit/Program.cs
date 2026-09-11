@@ -25,6 +25,7 @@ var completionRequest = new CompletionRequest
     ThinkingBudget = 5000,
     EnableCache = true,
     JsonSchema = requestSchema,
+    ToolIterationObserver = new AuditObserver(),
 };
 
 var embeddingRequest = new EmbeddingRequest
@@ -94,6 +95,12 @@ public sealed record WeatherInfo
 {
     public required string City { get; init; }
     public required double Temperature { get; init; }
+}
+
+internal sealed class AuditObserver : IToolIterationObserver
+{
+    public ValueTask OnStartingAsync(ToolIterationRequest request, CancellationToken cancellationToken) => ValueTask.CompletedTask;
+    public ValueTask OnFinishedAsync(ToolIterationResult result) => ValueTask.CompletedTask;
 }
 
 [JsonSerializable(typeof(WeatherInfo))]

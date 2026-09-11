@@ -22,6 +22,14 @@ Trim-friendly .NET AI inference client for OpenAI, Anthropic, Google, and xAI, b
 - **Diagnostics** — `CompletionDiagnostics` exposes endpoint family, stop reason, and truncation hints
 - **AOT/trimming-first** — manual provider JSON construction/parsing where it reduces reflection risk and wire bloat
 
+## Accounting inside tool dialogs
+
+Set `CompletionRequest.ToolIterationObserver` to an `IToolIterationObserver` when a tool dialog needs per-call budget reservations and durable usage accounting. `OnStartingAsync` receives the current conversation (including earlier tool results) and tool definitions before each provider call; throwing prevents that call. `OnFinishedAsync` runs before tool execution and reports only that call's usage, so a later provider/tool failure cannot hide an earlier call's reported consumption. Both typed and untyped `CompleteWithToolsAsync`, plus `StreamWithToolsAsync`, support this boundary.
+
+`Usage == null` means consumption was not reported. `ResponseCompleted == false` means failure, cancellation or early stream disposal; any reported usage may be partial. Dispose streaming enumerators to run their final accounting callback. The finished callback is not given an already-canceled request token; consumers must bound their own persistence work. Callback failures stop the loop. Provider-internal HTTP retries remain inside one observed call, and this interface does not turn estimated reservations into an exact provider invoice or a guaranteed token ceiling. Plain completion APIs retain their existing response-based accounting.
+
+Build with a serviced .NET SDK. SourceLink is supplied by the SDK; an explicit old SourceLink package would override it. See [Microsoft's SourceLink guidance](https://github.com/dotnet/sourcelink#using-source-link-in-net-projects) and [the affected build-task advisory](https://github.com/dotnet/sourcelink/issues/1757).
+
 ## Design Goals
 
 - One public facade: `IAiInferenceClient`

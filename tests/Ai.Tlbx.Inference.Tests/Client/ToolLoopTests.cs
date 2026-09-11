@@ -275,6 +275,192 @@ public sealed class ToolLoopTests
         Assert.Equal(2, result.Iterations);
     }
 
+    [Fact]
+    public async Task ObserverCanDenyNextCallAfterRecordingFirstUsageAndToolResult()
+    {
+        var calls = 0;
+        var observer = new RecordingObserver { DenyIteration = 2 };
+        var client = CreateClient(new MockHttpHandler(_ =>
+        {
+            calls++;
+            return Task.FromResult(BuildToolCallResponse("call_1", "get_weather", "{}"));
+        }));
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => client.CompleteWithToolsAsync(
+            ObservedRequest(observer), _testTools, call =>
+            {
+                Assert.Single(observer.Finished);
+                return Task.FromResult(new ToolCallResult { ToolCallId = call.Id, Result = "sunny" });
+            }));
+
+        Assert.Equal(1, calls);
+        Assert.Equal(2, observer.Started.Count);
+        Assert.Single(observer.Finished);
+        Assert.Equal(10, observer.Finished[0].Usage!.Value.InputTokens);
+        Assert.True(observer.Finished[0].ResponseCompleted);
+        Assert.Equal("sunny", observer.Started[1].Request.Messages[^1].Content);
+        Assert.Equal(3, observer.Started[1].Request.Messages.Count);
+        Assert.Single(observer.Started[1].Tools);
+        Assert.Null(observer.Started[1].Request.ToolIterationObserver);
+        Assert.Single(observer.Started[0].Request.Messages);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ObserverRetainsUsageWhenLaterProviderOrToolFails(bool failTool)
+    {
+        var calls = 0;
+        var observer = new RecordingObserver();
+        var client = CreateClient(new MockHttpHandler(_ => Task.FromResult(++calls == 1
+            ? BuildToolCallResponse("call_1", "get_weather", "{}")
+            : new HttpResponseMessage(HttpStatusCode.BadRequest) { Content = new StringContent("rejected") })));
+
+        await Assert.ThrowsAnyAsync<Exception>(() => client.CompleteWithToolsAsync(
+            ObservedRequest(observer), _testTools, call => failTool
+                ? throw new InvalidOperationException("tool failed")
+                : Task.FromResult(new ToolCallResult { ToolCallId = call.Id, Result = "sunny" })));
+
+        Assert.Equal(failTool ? 1 : 2, calls);
+        Assert.Equal(calls, observer.Finished.Count);
+        Assert.True(observer.Finished[0].ResponseCompleted);
+        Assert.Equal(15, observer.Finished[0].Usage!.Value.TotalTokens);
+        if (!failTool)
+        {
+            Assert.False(observer.Finished[1].ResponseCompleted);
+            Assert.Null(observer.Finished[1].Usage);
+        }
+    }
+
+    [Fact]
+    public async Task ObserverRecordsUsageBeforeTypedResultDeserializationFails()
+    {
+        var observer = new RecordingObserver();
+        var client = CreateClient(new MockHttpHandler(_ => Task.FromResult(BuildFinalResponse("invalid JSON"))));
+
+        await Assert.ThrowsAsync<JsonException>(() => client.CompleteWithToolsAsync(
+            ObservedRequest(observer), _testTools,
+            _ => throw new InvalidOperationException("No tools expected"), ToolLoopJsonContext.Default.WeatherResult));
+
+        var result = Assert.Single(observer.Finished);
+        Assert.True(result.ResponseCompleted);
+        Assert.Equal(15, result.Usage!.Value.TotalTokens);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task StreamObserverDistinguishesCompletedResponseFromEarlyDisposal(bool disposeEarly)
+    {
+        var observer = new RecordingObserver();
+        var sse = "data: {\"choices\":[{\"delta\":{}}],\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":2}}\n\n"
+            + "data: {\"choices\":[{\"delta\":{\"content\":\"Hello\"}}]}\n\n"
+            + "data: [DONE]\n\n";
+        var client = CreateClient(new MockHttpHandler(_ => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(sse, System.Text.Encoding.UTF8, "text/event-stream")
+        })));
+
+        await foreach (var item in client.StreamWithToolsAsync(ObservedRequest(observer), _testTools,
+            _ => throw new InvalidOperationException("No tools expected")))
+        {
+            if (disposeEarly) break;
+            if (item is CompletedEvent) Assert.Single(observer.Finished);
+        }
+
+        var result = Assert.Single(observer.Finished);
+        Assert.Equal(!disposeEarly, result.ResponseCompleted);
+        Assert.Equal(7, result.Usage!.Value.TotalTokens);
+    }
+
+    [Fact]
+    public async Task StreamObserverDeniesNextCallAfterToolUsageIsRecorded()
+    {
+        var observer = new RecordingObserver { DenyIteration = 2 };
+        var calls = 0;
+        var sse = "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"get_weather\",\"arguments\":\"{}\"}}]}}]}\n\n"
+            + "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}],\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":2}}\n\n"
+            + "data: [DONE]\n\n";
+        var client = CreateClient(new MockHttpHandler(_ =>
+        {
+            calls++;
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(sse, System.Text.Encoding.UTF8, "text/event-stream")
+            });
+        }));
+
+        await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+        {
+            await foreach (var item in client.StreamWithToolsAsync(ObservedRequest(observer), _testTools, call =>
+            {
+                Assert.Single(observer.Finished);
+                return Task.FromResult(new ToolCallResult { ToolCallId = call.Id, Result = "sunny" });
+            })) { }
+        });
+
+        Assert.Equal(1, calls);
+        Assert.Equal(2, observer.Started.Count);
+        var result = Assert.Single(observer.Finished);
+        Assert.True(result.ResponseCompleted);
+        Assert.Equal(7, result.Usage!.Value.TotalTokens);
+        Assert.Equal("sunny", observer.Started[1].Request.Messages[^1].Content);
+    }
+
+    [Fact]
+    public async Task StreamObserverReportsKnownUsageOnCancellation()
+    {
+        var observer = new RecordingObserver();
+        using var cancellation = new CancellationTokenSource();
+        var sse = "data: {\"choices\":[{\"delta\":{}}],\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":2}}\n\n"
+            + "data: {\"choices\":[{\"delta\":{\"content\":\"Hello\"}}]}\n\n"
+            + "data: [DONE]\n\n";
+        var client = CreateClient(new MockHttpHandler(_ => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(sse, System.Text.Encoding.UTF8, "text/event-stream")
+        })));
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
+        {
+            await foreach (var item in client.StreamWithToolsAsync(ObservedRequest(observer), _testTools,
+                _ => throw new InvalidOperationException("No tools expected"), ct: cancellation.Token))
+            {
+                cancellation.Cancel();
+            }
+        });
+
+        var result = Assert.Single(observer.Finished);
+        Assert.False(result.ResponseCompleted);
+        Assert.Equal(7, result.Usage!.Value.TotalTokens);
+    }
+
+    private static CompletionRequest ObservedRequest(IToolIterationObserver observer) => new()
+    {
+        Model = AiModel.Gpt52,
+        Messages = [new ChatMessage { Role = ChatRole.User, Content = "Weather?" }],
+        ToolIterationObserver = observer,
+    };
+
+    private sealed class RecordingObserver : IToolIterationObserver
+    {
+        public int? DenyIteration { get; init; }
+        public List<ToolIterationRequest> Started { get; } = [];
+        public List<ToolIterationResult> Finished { get; } = [];
+
+        public ValueTask OnStartingAsync(ToolIterationRequest request, CancellationToken cancellationToken)
+        {
+            Started.Add(request);
+            if (request.Iteration == DenyIteration) throw new InvalidOperationException("budget denied");
+            return ValueTask.CompletedTask;
+        }
+
+        public ValueTask OnFinishedAsync(ToolIterationResult result)
+        {
+            Finished.Add(result);
+            return ValueTask.CompletedTask;
+        }
+    }
+
     private static AiInferenceClient CreateClient(MockHttpHandler handler)
     {
         var httpClient = new HttpClient(handler);

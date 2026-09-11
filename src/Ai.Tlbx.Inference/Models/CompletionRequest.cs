@@ -15,4 +15,9 @@ public sealed record CompletionRequest
     public bool EnableWebSearch { get; init; }
     public bool EnableXSearch { get; init; }
     public GroundingOptions? Grounding { get; init; }
+    /// <summary>
+    /// Optional per-provider-call accounting for CompleteWithToolsAsync and StreamWithToolsAsync.
+    /// Provider-internal HTTP retries are part of the same call. Not used by the plain completion APIs.
+    /// </summary>
+    public IToolIterationObserver? ToolIterationObserver { get; init; }
 }
