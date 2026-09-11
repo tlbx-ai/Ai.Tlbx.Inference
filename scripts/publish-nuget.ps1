@@ -33,6 +33,6 @@ if ($PSCmdlet.ShouldProcess($packagePath, 'Publish NuGet package and associated 
     & dotnet @arguments
     if ($LASTEXITCODE -ne 0)
     {
-        throw "dotnet $($arguments -join ' ') failed with exit code $LASTEXITCODE."
+        throw "NuGet publication failed with exit code $LASTEXITCODE."
     }
 }
