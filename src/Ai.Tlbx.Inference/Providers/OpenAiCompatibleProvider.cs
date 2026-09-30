@@ -78,7 +78,7 @@ internal abstract class OpenAiCompatibleProvider : IProvider
             }
         }
 
-        var usage = ParseUsage(root.GetProperty("usage"));
+        var usage = ParseUsage(root.GetProperty("usage")) with { ServiceTier = ReadServiceTier(root) };
 
         return new ProviderResponse
         {
@@ -167,7 +167,7 @@ internal abstract class OpenAiCompatibleProvider : IProvider
                 : null;
 
             var usage = root.TryGetProperty("usage", out var usageEl)
-                ? ParseResponsesUsage(usageEl)
+                ? ParseResponsesUsage(usageEl) with { ServiceTier = ReadServiceTier(root) }
                 : new TokenUsage();
             var grounding = ParseResponsesGrounding(root, request);
 
@@ -307,7 +307,7 @@ internal abstract class OpenAiCompatibleProvider : IProvider
                             {
                                 yield return new ProviderStreamEvent
                                 {
-                                    Usage = ParseResponsesUsage(usageEl),
+                                    Usage = ParseResponsesUsage(usageEl) with { ServiceTier = ReadServiceTier(resp) },
                                     Grounding = ParseResponsesGrounding(resp, request),
                                 };
                             }
@@ -367,7 +367,7 @@ internal abstract class OpenAiCompatibleProvider : IProvider
                 {
                     yield return new ProviderStreamEvent
                     {
-                        Usage = ParseUsage(usageEl),
+                        Usage = ParseUsage(usageEl) with { ServiceTier = ReadServiceTier(root) },
                     };
                 }
             }
@@ -593,9 +593,13 @@ internal abstract class OpenAiCompatibleProvider : IProvider
             body["stop"] = stopArray;
         }
 
-        if (request.ThinkingBudget.HasValue)
+        if (request.ServiceTier is not null)
         {
-            body["reasoning_effort"] = MapReasoningEffort(request.ThinkingBudget.Value);
+            body["service_tier"] = request.ServiceTier;
+        }
+        if (request.ReasoningEffort is not null || request.ThinkingBudget.HasValue)
+        {
+            body["reasoning_effort"] = request.ReasoningEffort ?? MapReasoningEffort(request.ThinkingBudget!.Value);
         }
 
         if (request.Tools is { Count: > 0 })
@@ -814,11 +818,15 @@ internal abstract class OpenAiCompatibleProvider : IProvider
         if (request.MaxTokens.HasValue)
             body["max_output_tokens"] = request.MaxTokens.Value;
 
-        if (request.ThinkingBudget.HasValue)
+        if (request.ServiceTier is not null)
+        {
+            body["service_tier"] = request.ServiceTier;
+        }
+        if (request.ReasoningEffort is not null || request.ThinkingBudget.HasValue)
         {
             body["reasoning"] = new JsonObject
             {
-                ["effort"] = MapReasoningEffort(request.ThinkingBudget.Value),
+                ["effort"] = request.ReasoningEffort ?? MapReasoningEffort(request.ThinkingBudget!.Value),
             };
         }
 
@@ -870,6 +878,10 @@ internal abstract class OpenAiCompatibleProvider : IProvider
             ThinkingTokens = thinkingTokens,
         };
     }
+
+    private static string? ReadServiceTier(JsonElement response)
+        => response.TryGetProperty("service_tier", out var tier) && tier.ValueKind == JsonValueKind.String
+            ? tier.GetString() : null;
 
     private bool IsXai => _context.BaseUrl.Contains("api.x.ai", StringComparison.OrdinalIgnoreCase);
 

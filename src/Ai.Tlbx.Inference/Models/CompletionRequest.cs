@@ -8,6 +8,8 @@ public sealed record CompletionRequest
     public double? Temperature { get; init; }
     public int? MaxTokens { get; init; }
     public int? ThinkingBudget { get; init; }
+    public string? ReasoningEffort { get; init; }
+    public string? ServiceTier { get; init; }
     public bool EnableCache { get; init; }
     public string? JsonSchema { get; init; }
     public double? TopP { get; init; }

@@ -107,6 +107,9 @@ public static class AiModelCostCatalog
             [AiModel.Gpt53Chat] = OpenAi("gpt-5.3-chat-latest", input: 1.75m, cachedInput: 0.175m, output: 14m),
             [AiModel.Gpt54] = OpenAi("gpt-5.4", input: 2.5m, cachedInput: 0.25m, output: 15m),
             [AiModel.Gpt56Luna] = OpenAi("gpt-5.6-luna", input: 0.20m, cachedInput: 0.02m, output: 1.20m),
+            [AiModel.Gpt6Luna] = OpenAi("gpt-6-luna", input: 0.1m, cachedInput: 0.01m, output: 0.5m) with { CacheWriteInputPerMillion = 0.125m },
+            [AiModel.Gpt6Sol] = OpenAi("gpt-6-sol", input: 2m, cachedInput: 0.2m, output: 10m) with { CacheWriteInputPerMillion = 2.5m },
+            [AiModel.Gpt61Sol] = OpenAi("gpt-6.1-sol", input: 2m, cachedInput: 0.1m, output: 10m) with { CacheWriteInputPerMillion = 2.5m },
             [AiModel.ClaudeOpus46] = Anthropic("claude-opus-4-6", input: 5m, cacheWrite: 6.25m, cacheRead: 0.5m, output: 25m),
             [AiModel.ClaudeSonnet46] = Anthropic("claude-sonnet-4-6", input: 3m, cacheWrite: 3.75m, cacheRead: 0.3m, output: 15m),
             [AiModel.ClaudeHaiku45] = Anthropic("claude-haiku-4-5-20251001", input: 1m, cacheWrite: 1.25m, cacheRead: 0.1m, output: 5m),
@@ -142,6 +145,27 @@ public static class AiModelCostCatalog
         => TryGetRates(model, out var rates)
             ? rates
             : throw new ArgumentOutOfRangeException(nameof(model), model, "No token cost rates are registered for this model.");
+
+    public static TokenCostRates GetRates(AiModel model, string? serviceTier)
+    {
+        var rates = GetRates(model);
+        if (serviceTier is null or "auto" or "default") return rates;
+        if (model is not (AiModel.Gpt6Luna or AiModel.Gpt6Sol or AiModel.Gpt61Sol))
+            throw new ArgumentException("Tier pricing is registered for GPT-6 Luna and Sol models only.", nameof(model));
+        var multiplier = serviceTier switch
+        {
+            "fast" or "priority" => 2m,
+            "flex" => 0.5m,
+            _ => throw new ArgumentException("Unsupported service tier.", nameof(serviceTier))
+        };
+        return rates with
+        {
+            InputPerMillion = rates.InputPerMillion * multiplier,
+            CachedInputPerMillion = rates.CachedInputPerMillion * multiplier,
+            CacheWriteInputPerMillion = rates.CacheWriteInputPerMillion * multiplier,
+            OutputPerMillion = rates.OutputPerMillion * multiplier
+        };
+    }
 
     public static TokenCostEstimate EstimateCost(this TokenUsage usage, AiModel model, decimal markupPercent = 0m)
         => TokenCostCalculator.Estimate(usage, GetRates(model), markupPercent);

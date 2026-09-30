@@ -24,7 +24,12 @@ public enum AiModel
     // xAI
     Grok41Fast,
     Grok41FastNonReasoning,
-    Grok4
+    Grok4,
+
+    // Keep existing enum values stable for persisted model selections.
+    Gpt6Luna,
+    Gpt6Sol,
+    Gpt61Sol
 }
 
 public static class AiModelExtensions

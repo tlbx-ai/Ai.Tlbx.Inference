@@ -515,6 +515,23 @@ public sealed class AiInferenceClient : IAiInferenceClient
         string? jsonSchemaOverride = null,
         IReadOnlyList<ToolDefinition>? tools = null)
     {
+        if (request.ServiceTier is not (null or "auto" or "default" or "flex" or "fast" or "priority"))
+        {
+            throw new ArgumentException("Unsupported service tier.", nameof(request));
+        }
+        if (request.ReasoningEffort is not (null or "none" or "low" or "medium" or "high" or "xhigh" or "max"))
+        {
+            throw new ArgumentException("Unsupported reasoning effort.", nameof(request));
+        }
+        if (request.Model == AiModel.Gpt61Sol && request.ReasoningEffort == "none")
+        {
+            throw new ArgumentException("GPT-6.1 Sol requires reasoning.", nameof(request));
+        }
+        if ((request.ServiceTier is not null || request.ReasoningEffort is not null)
+            && request.Model.GetProvider() != ProviderType.OpenAi)
+        {
+            throw new ArgumentException("Explicit reasoning effort and service tier are OpenAI settings.", nameof(request));
+        }
         return new ProviderRequest
         {
             ModelApiName = request.Model.ToApiName(),
@@ -524,6 +541,8 @@ public sealed class AiInferenceClient : IAiInferenceClient
             Temperature = request.Temperature,
             MaxTokens = request.MaxTokens,
             ThinkingBudget = request.ThinkingBudget,
+            ReasoningEffort = request.ReasoningEffort,
+            ServiceTier = request.ServiceTier,
             EnableCache = request.EnableCache,
             JsonSchema = jsonSchemaOverride ?? request.JsonSchema,
             TopP = request.TopP,
