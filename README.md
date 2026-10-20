@@ -329,6 +329,29 @@ var editedBytes = await client.EditImageAsync(new ImageEditRequest
 OpenAI edits use multipart `image[]` inputs and return decoded PNG bytes. `gpt-image-2` preserves image inputs at
 high fidelity automatically.
 
+## Speech APIs (Voxtral 3)
+
+`AddOpenRouter(key)` and `AddMistral(key)` configure audio credentials. Audio operations
+use the dedicated speech/transcription endpoints, independently of the text model catalog.
+
+```csharp
+var client = new AiInferenceClient(httpClient, new AiInferenceOptions().AddOpenRouter(key));
+var mp3 = await client.GenerateSpeechAsync(new SpeechGenerationRequest {
+    Text = "Guten Tag!", Voice = "voice_481" // Fiona, German
+});
+var transcript = await client.TranscribeAudioAsync(new AudioTranscriptionRequest {
+    Audio = mp3, Format = "mp3", Language = "de",
+    Model = VoxtralModels.MiniTranscribe3 // or SmallTranscribe3
+});
+```
+
+`StreamSpeechAsync` yields raw audio chunks, with cancellation and response disposal.
+The default host is OpenRouter; set `Host = AudioHost.Mistral` for native Mistral requests.
+Native credentials are separate. MP3 output carries its actual sample rate; raw PCM
+encoding is provider-specific. Native Mistral HTTP shapes are contract-tested; Voxtral 3
+OpenRouter speech and both transcription models are live-tested. These APIs do not
+implement the separate realtime WebSocket service.
+
 ## Configuration
 
 ### Logging

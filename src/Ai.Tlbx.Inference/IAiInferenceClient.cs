@@ -4,6 +4,12 @@ namespace Ai.Tlbx.Inference;
 
 public interface IAiInferenceClient
 {
+    Task<AudioTranscriptionResponse> TranscribeAudioAsync(AudioTranscriptionRequest request, CancellationToken ct = default);
+
+    Task<byte[]> GenerateSpeechAsync(SpeechGenerationRequest request, CancellationToken ct = default);
+
+    IAsyncEnumerable<byte[]> StreamSpeechAsync(SpeechGenerationRequest request, CancellationToken ct = default);
+
     Task<CompletionResponse<string>> CompleteAsync(CompletionRequest request, CancellationToken ct = default);
 
     Task<CompletionResponse<T>> CompleteAsync<T>(CompletionRequest request, JsonTypeInfo<T> jsonTypeInfo, CancellationToken ct = default);

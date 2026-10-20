@@ -10,7 +10,7 @@ using Polly;
 
 namespace Ai.Tlbx.Inference;
 
-public sealed class AiInferenceClient : IAiInferenceClient
+public sealed partial class AiInferenceClient : IAiInferenceClient
 {
     private readonly Dictionary<ProviderType, IProvider> _providers = new();
     private readonly ResiliencePipeline<HttpResponseMessage> _resiliencePipeline;
@@ -18,6 +18,8 @@ public sealed class AiInferenceClient : IAiInferenceClient
 
     public AiInferenceClient(HttpClient httpClient, AiInferenceOptions options)
     {
+        _audioHttpClient = httpClient;
+        _audioOptions = options;
         _log = options.LogAction;
         _resiliencePipeline = options.CustomRetryPolicy ?? RetryPolicyFactory.CreateDefault(_log);
 

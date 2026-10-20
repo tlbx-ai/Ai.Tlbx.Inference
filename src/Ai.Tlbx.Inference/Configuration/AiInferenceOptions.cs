@@ -4,6 +4,22 @@ namespace Ai.Tlbx.Inference.Configuration;
 
 public sealed class AiInferenceOptions
 {
+    internal Dictionary<AudioHost, string> AudioKeys { get; } = new();
+
+    public AiInferenceOptions AddOpenRouter(string apiKey)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(apiKey);
+        AudioKeys[AudioHost.OpenRouter] = apiKey;
+        return this;
+    }
+
+    public AiInferenceOptions AddMistral(string apiKey)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(apiKey);
+        AudioKeys[AudioHost.Mistral] = apiKey;
+        return this;
+    }
+
     internal Dictionary<ProviderType, ProviderCredentials> Providers { get; } = new();
     internal Action<InferenceLogLevel, string>? LogAction { get; private set; }
     internal ResiliencePipeline<HttpResponseMessage>? CustomRetryPolicy { get; private set; }

@@ -8,6 +8,8 @@ options.AddOpenAi("sk-test");
 options.AddAnthropic("sk-ant-test");
 options.AddGoogle("AIza-test");
 options.AddXai("xai-test");
+options.AddOpenRouter("router-test");
+options.AddMistral("mistral-test");
 
 using var httpClient = new HttpClient();
 var client = new AiInferenceClient(httpClient, options);
@@ -88,6 +90,9 @@ _ = client.EmbedAsync(embeddingRequest);
 _ = client.EmbedBatchAsync(batchEmbeddingRequest);
 _ = client.GenerateImageAsync(imageRequest);
 _ = client.EditImageAsync(imageEditRequest);
+_ = client.TranscribeAudioAsync(new AudioTranscriptionRequest { Audio = [1, 2], Language = "de" });
+_ = client.GenerateSpeechAsync(new SpeechGenerationRequest { Text = "Hallo", Voice = "voice_481" });
+_ = client.StreamSpeechAsync(new SpeechGenerationRequest { Host = AudioHost.Mistral, Text = "Hallo", Voice = "voice_481" });
 
 Console.WriteLine("AOT audit app compiled.");
 
