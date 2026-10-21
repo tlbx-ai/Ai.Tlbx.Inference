@@ -16,6 +16,7 @@ internal sealed class GoogleProvider : IProvider
     private readonly string? _location;
 
     private bool IsVertex => _tokenProvider is not null;
+    private string VertexHost => _location == "global" ? "aiplatform.googleapis.com" : $"{_location}-aiplatform.googleapis.com";
 
     public GoogleProvider(
         ProviderRequestContext context,
@@ -546,7 +547,7 @@ internal sealed class GoogleProvider : IProvider
     {
         if (IsVertex)
         {
-            return $"https://{_location}-aiplatform.googleapis.com/v1/projects/{_projectId}/locations/{_location}/publishers/google/models/{model}:{method}";
+            return $"https://{VertexHost}/v1/projects/{_projectId}/locations/{_location}/publishers/google/models/{model}:{method}";
         }
 
         return $"https://generativelanguage.googleapis.com/v1beta/models/{model}:{method}?key={_context.ApiKey}";
@@ -556,7 +557,7 @@ internal sealed class GoogleProvider : IProvider
     {
         if (IsVertex)
         {
-            return $"https://{_location}-aiplatform.googleapis.com/v1/projects/{_projectId}/locations/{_location}/publishers/google/models/{model}:streamGenerateContent?alt=sse";
+            return $"https://{VertexHost}/v1/projects/{_projectId}/locations/{_location}/publishers/google/models/{model}:streamGenerateContent?alt=sse";
         }
 
         return $"https://generativelanguage.googleapis.com/v1beta/models/{model}:streamGenerateContent?alt=sse&key={_context.ApiKey}";
