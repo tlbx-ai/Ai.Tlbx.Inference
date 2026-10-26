@@ -691,7 +691,7 @@ public sealed class OpenAiProviderTests
         Assert.Equal("web_search", tool.GetProperty("type").GetString());
         Assert.Contains(tool.GetProperty("search_content_types").EnumerateArray(), value => value.GetString() == "image");
         Assert.Equal("wikipedia.org", tool.GetProperty("filters").GetProperty("allowed_domains")[0].GetString());
-        Assert.Equal(2, request.RootElement.GetProperty("include").GetArrayLength());
+        Assert.Equal(3, request.RootElement.GetProperty("include").GetArrayLength());
         Assert.NotNull(response.Grounding);
         Assert.Single(response.Grounding!.Sources);
         Assert.Single(response.Grounding.Images);

@@ -34,6 +34,7 @@ internal sealed record ProviderRequest
 internal sealed record ProviderResponse
 {
     public required string Content { get; init; }
+    public string? ProviderContentJson { get; init; }
     public required TokenUsage Usage { get; init; }
     public required ModelEndpointFamily EndpointFamily { get; init; }
     public string? StopReason { get; init; }
@@ -45,6 +46,7 @@ internal sealed record ProviderResponse
 internal sealed record ProviderStreamEvent
 {
     public string? TextDelta { get; init; }
+    public string? ProviderContentJson { get; init; }
     public ToolCallRequest? ToolCall { get; init; }
     public TokenUsage? Usage { get; init; }
     public GroundingResult? Grounding { get; init; }

@@ -82,6 +82,7 @@ internal sealed class AnthropicProvider : IProvider
             ToolCalls = toolCalls,
             DiagnosticNote = BuildDiagnosticNote(contentBuilder.ToString(), stopReason),
             Grounding = grounding,
+            ProviderContentJson = root.TryGetProperty("content", out var rawContent) ? rawContent.GetRawText() : null,
         };
     }
 
@@ -119,6 +120,8 @@ internal sealed class AnthropicProvider : IProvider
         var groundingSources = new List<GroundingSource>();
         var groundingQueries = new List<string>();
         var webSearchCalls = 0;
+        var assistantContent = new JsonArray();
+        JsonObject? currentContentBlock = null;
 
         string? line;
         while ((line = await reader.ReadLineAsync(ct).ConfigureAwait(false)) is not null)
@@ -139,7 +142,12 @@ internal sealed class AnthropicProvider : IProvider
                             SearchQueries = groundingQueries.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
                             Usage = new GroundingUsage { WebSearchCalls = webSearchCalls },
                         };
-                    yield return new ProviderStreamEvent { Usage = accumulatedUsage, Grounding = grounding };
+                    yield return new ProviderStreamEvent
+                    {
+                        Usage = accumulatedUsage,
+                        Grounding = grounding,
+                        ProviderContentJson = assistantContent.ToJsonString(),
+                    };
                     yield break;
                 }
 
@@ -186,6 +194,8 @@ internal sealed class AnthropicProvider : IProvider
                 {
                     if (root.TryGetProperty("content_block", out var block))
                     {
+                        currentContentBlock = JsonNode.Parse(block.GetRawText())!.AsObject();
+                        assistantContent.Add((JsonNode)currentContentBlock);
                         currentBlockType = block.GetProperty("type").GetString();
 
                         if (currentBlockType == "tool_use")
@@ -220,8 +230,27 @@ internal sealed class AnthropicProvider : IProvider
                             var text = delta.GetProperty("text").GetString();
                             if (text is not null)
                             {
+                                AppendStringDelta(currentContentBlock, "text", text);
                                 yield return new ProviderStreamEvent { TextDelta = text };
                             }
+                        }
+                        else if (deltaType == "thinking_delta" && delta.TryGetProperty("thinking", out var thinking))
+                        {
+                            AppendStringDelta(currentContentBlock, "thinking", thinking.GetString());
+                        }
+                        else if (deltaType == "signature_delta" && delta.TryGetProperty("signature", out var signature))
+                        {
+                            AppendStringDelta(currentContentBlock, "signature", signature.GetString());
+                        }
+                        else if (deltaType == "citations_delta" && delta.TryGetProperty("citation", out var citation) && currentContentBlock is not null)
+                        {
+                            var citations = currentContentBlock["citations"] as JsonArray;
+                            if (citations is null)
+                            {
+                                citations = new JsonArray();
+                                currentContentBlock["citations"] = citations;
+                            }
+                            citations.Add(JsonNode.Parse(citation.GetRawText()));
                         }
                         else if (deltaType == "input_json_delta")
                         {
@@ -237,6 +266,11 @@ internal sealed class AnthropicProvider : IProvider
 
                 case "content_block_stop":
                 {
+                    if (toolArgsBuilder.Length > 0 && currentContentBlock is not null &&
+                        currentBlockType is "tool_use" or "server_tool_use")
+                    {
+                        currentContentBlock["input"] = JsonNode.Parse(toolArgsBuilder.ToString());
+                    }
                     if (currentBlockType == "tool_use" && currentToolId is not null && currentToolName is not null)
                     {
                         yield return new ProviderStreamEvent
@@ -245,7 +279,9 @@ internal sealed class AnthropicProvider : IProvider
                             {
                                 Id = currentToolId,
                                 Name = currentToolName,
-                                Arguments = toolArgsBuilder.ToString(),
+                                Arguments = toolArgsBuilder.Length > 0
+                                    ? toolArgsBuilder.ToString()
+                                    : currentContentBlock?["input"]?.ToJsonString() ?? "{}",
                             },
                         };
                     }
@@ -253,6 +289,7 @@ internal sealed class AnthropicProvider : IProvider
                     currentBlockType = null;
                     currentToolId = null;
                     currentToolName = null;
+                    currentContentBlock = null;
                     toolArgsBuilder.Clear();
                     break;
                 }
@@ -290,10 +327,26 @@ internal sealed class AnthropicProvider : IProvider
 
     private JsonObject BuildRequestBody(ProviderRequest request, bool stream)
     {
+        var adaptiveThinkingOnly = UsesAdaptiveThinkingOnly(request.ModelApiName);
+        if (adaptiveThinkingOnly && (request.Temperature.HasValue || request.TopP.HasValue))
+        {
+            throw new ArgumentException("This Claude model does not support Temperature or TopP; use ReasoningEffort and prompting instead.", nameof(request));
+        }
+
         var messages = new JsonArray();
 
         foreach (var msg in request.Messages)
         {
+            if (msg.Role == ChatRole.Assistant && msg.ProviderContentJson is not null)
+            {
+                messages.Add((JsonNode)new JsonObject
+                {
+                    ["role"] = "assistant",
+                    ["content"] = JsonNode.Parse(msg.ProviderContentJson),
+                });
+                continue;
+            }
+
             switch (msg.Role)
             {
                 case ChatRole.User when msg.Attachments is { Count: > 0 }:
@@ -422,7 +475,36 @@ internal sealed class AnthropicProvider : IProvider
             body["stop_sequences"] = stopArray;
         }
 
-        if (request.ThinkingBudget.HasValue)
+        var outputConfig = new JsonObject();
+        if (adaptiveThinkingOnly)
+        {
+            // Current Claude models reject manual thinking budgets. Retain the
+            // universal budget knob as a soft effort preference, not a token limit.
+            var effort = request.ReasoningEffort ?? (request.ThinkingBudget.HasValue
+                ? MapAdaptiveEffort(request.ThinkingBudget.Value)
+                : null);
+            if (effort == "none")
+            {
+                var thinkingType = request.ModelApiName switch
+                {
+                    "claude-sonnet-5-5" => "between_tools",
+                    "claude-haiku-5-5" => "disabled",
+                    _ => throw new ArgumentException("Thinking cannot be disabled for this Claude model.", nameof(request)),
+                };
+                body["thinking"] = new JsonObject { ["type"] = thinkingType };
+                outputConfig["effort"] = "low";
+            }
+            else if (effort is not null)
+            {
+                if (effort is not ("low" or "medium" or "high" or "xhigh" or "max"))
+                {
+                    throw new ArgumentException("Unsupported Claude reasoning effort.", nameof(request));
+                }
+                body["thinking"] = new JsonObject { ["type"] = "adaptive" };
+                outputConfig["effort"] = effort;
+            }
+        }
+        else if (request.ThinkingBudget.HasValue)
         {
             body["thinking"] = new JsonObject
             {
@@ -484,17 +566,16 @@ internal sealed class AnthropicProvider : IProvider
 
         if (request.JsonSchema is not null)
         {
-            body["tools"] = new JsonArray
+            // JSON outputs coexist with normal tools and adaptive thinking. A
+            // forced synthetic tool is rejected by the current Opus/Fable models.
+            outputConfig["format"] = new JsonObject
             {
-                (JsonNode)new JsonObject
-                {
-                    ["name"] = "json_response",
-                    ["description"] = "Respond with structured JSON matching the provided schema.",
-                    ["input_schema"] = JsonNode.Parse(request.JsonSchema),
-                },
+                ["type"] = "json_schema",
+                ["schema"] = JsonNode.Parse(request.JsonSchema),
             };
-            body["tool_choice"] = new JsonObject { ["type"] = "tool", ["name"] = "json_response" };
         }
+
+        if (outputConfig.Count > 0) body["output_config"] = outputConfig;
 
         if (stream)
         {
@@ -502,6 +583,24 @@ internal sealed class AnthropicProvider : IProvider
         }
 
         return body;
+    }
+
+    private static bool UsesAdaptiveThinkingOnly(string modelApiName)
+        => modelApiName is "claude-fable-5-1" or "claude-opus-5-5" or "claude-sonnet-5-5" or "claude-haiku-5-5";
+
+    private static string MapAdaptiveEffort(int thinkingBudget) => thinkingBudget switch
+    {
+        <= 2048 => "low",
+        <= 8192 => "medium",
+        _ => "high",
+    };
+
+    private static void AppendStringDelta(JsonObject? block, string propertyName, string? delta)
+    {
+        if (block is not null && delta is not null)
+        {
+            block[propertyName] = (block[propertyName]?.GetValue<string>() ?? "") + delta;
+        }
     }
 
     private static ReadOnlyMemory<byte> SerializeToUtf8Bytes(JsonObject body)

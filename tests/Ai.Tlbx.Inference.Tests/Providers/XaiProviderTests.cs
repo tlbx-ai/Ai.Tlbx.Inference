@@ -252,7 +252,7 @@ public sealed class XaiProviderTests
         var tool = request.RootElement.GetProperty("tools")[0];
         Assert.True(tool.GetProperty("enable_image_search").GetBoolean());
         Assert.Equal("bad.example", tool.GetProperty("filters").GetProperty("excluded_domains")[0].GetString());
-        Assert.False(request.RootElement.TryGetProperty("include", out _));
+        Assert.Contains(request.RootElement.GetProperty("include").EnumerateArray(), item => item.GetString() == "reasoning.encrypted_content");
         Assert.NotNull(response.Grounding);
         Assert.Single(response.Grounding!.Sources);
         Assert.Equal(1, response.Grounding.Usage.WebSearchCalls);

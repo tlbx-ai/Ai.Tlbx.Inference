@@ -12,6 +12,9 @@ public sealed record TokenCostRates
     public decimal? WebSearchPerThousand { get; init; }
     public decimal? ImageSearchPerThousand { get; init; }
     public decimal? XSearchPerThousand { get; init; }
+    public int? LongContextStartsAtTokens { get; init; }
+    public decimal LongContextInputMultiplier { get; init; } = 1m;
+    public decimal LongContextOutputMultiplier { get; init; } = 1m;
 }
 
 public sealed record TokenCostEstimate
@@ -57,11 +60,14 @@ public static class TokenCostCalculator
         var uncachedInputTokens = Math.Max(0, usage.InputTokens - cacheReadTokens - cacheWriteTokens);
         var outputTokens = Math.Max(0, usage.OutputTokens);
 
-        var tokenCost =
+        var longContext = rates.LongContextStartsAtTokens is int threshold && usage.InputTokens >= threshold;
+        var inputMultiplier = longContext ? rates.LongContextInputMultiplier : 1m;
+        var outputMultiplier = longContext ? rates.LongContextOutputMultiplier : 1m;
+        var tokenCost = inputMultiplier * (
             CostForTokens(uncachedInputTokens, rates.InputPerMillion) +
             CostForTokens(cacheReadTokens, rates.CachedInputPerMillion ?? rates.InputPerMillion) +
-            CostForTokens(cacheWriteTokens, rates.CacheWriteInputPerMillion ?? rates.InputPerMillion) +
-            CostForTokens(outputTokens, rates.OutputPerMillion);
+            CostForTokens(cacheWriteTokens, rates.CacheWriteInputPerMillion ?? rates.InputPerMillion)) +
+            outputMultiplier * CostForTokens(outputTokens, rates.OutputPerMillion);
 
         var hostedToolCost =
             CostForCalls(groundingUsage.WebSearchCalls, rates.WebSearchPerThousand) +
@@ -118,8 +124,22 @@ public static class AiModelCostCatalog
             [AiModel.Gemini31ProPreview] = Google("gemini-3.1-pro-preview", input: 2m, cachedInput: 0.2m, output: 12m),
             [AiModel.Gemini31FlashLitePreview] = Google("gemini-3.1-flash-lite-preview", input: 0.25m, cachedInput: 0.025m, output: 1.5m),
             [AiModel.Grok41Fast] = Xai("grok-4-1-fast-reasoning", input: 1.25m, cachedInput: 0.2m, output: 2.5m),
-            [AiModel.Grok41FastNonReasoning] = Xai("grok-4-1-fast", input: 1.25m, cachedInput: 0.2m, output: 2.5m),
-            [AiModel.Grok4] = Xai("grok-4", input: 1.25m, cachedInput: 0.2m, output: 2.5m)
+            [AiModel.Grok41FastNonReasoning] = Xai("grok-4-1-fast-non-reasoning", input: 1.25m, cachedInput: 0.2m, output: 2.5m),
+            [AiModel.Grok4] = Xai("grok-4", input: 1.25m, cachedInput: 0.2m, output: 2.5m),
+            [AiModel.Gpt6Astra] = OpenAi("gpt-6-astra", 10m, 1m, 50m) with { CacheWriteInputPerMillion = 12.5m, LongContextStartsAtTokens = 272001, LongContextInputMultiplier = 2m, LongContextOutputMultiplier = 1.5m },
+            [AiModel.Gpt61Terra] = OpenAi("gpt-6.1-terra", 1m, 0.05m, 5m) with { CacheWriteInputPerMillion = 1.25m, LongContextStartsAtTokens = 272001, LongContextInputMultiplier = 2m, LongContextOutputMultiplier = 1.5m },
+            [AiModel.ChatLatest] = OpenAi("chat-latest", 5m, 0.5m, 30m),
+            [AiModel.ClaudeFable51] = Anthropic("claude-fable-5-1", 10m, 12.5m, 0.25m, 50m),
+            [AiModel.ClaudeOpus55] = Anthropic("claude-opus-5-5", 4m, 5m, 0.20m, 20m),
+            [AiModel.ClaudeSonnet55] = Anthropic("claude-sonnet-5-5", 2m, 2.5m, 0.10m, 10m),
+            [AiModel.ClaudeHaiku55] = Anthropic("claude-haiku-5-5", 0.1m, 0.125m, 0.01m, 0.5m) with { LongContextStartsAtTokens = 100001, LongContextInputMultiplier = 5m, LongContextOutputMultiplier = 5m },
+            [AiModel.Gemini4Argon] = Google("gemini-4-argon", 4m, 0.20m, 20m),
+            [AiModel.Gemini38Flash] = Google("gemini-3.8-flash", 1.5m, 0.15m, 7.5m),
+            [AiModel.Gemini35FlashLite] = Google("gemini-3.5-flash-lite", 0.30m, 0.03m, 2.50m),
+            [AiModel.Gemini31FlashLite] = Google("gemini-3.1-flash-lite", 0.25m, 0.025m, 1.50m),
+            [AiModel.Grok47] = Xai("grok-4.7", 2m, 0.50m, 6m),
+            [AiModel.Grok46] = Xai("grok-4.6", 2m, 0.50m, 6m),
+            [AiModel.Grok43] = Xai("grok-4.3", 1.25m, 0.20m, 2.50m),
         };
 
     private static readonly IReadOnlyDictionary<EmbeddingModel, TokenCostRates> _embeddingModelRates =
@@ -127,11 +147,28 @@ public static class AiModelCostCatalog
         {
             [EmbeddingModel.TextEmbedding3Large] = OpenAi("text-embedding-3-large", input: 0.13m, cachedInput: null, output: 0m),
             [EmbeddingModel.TextEmbedding3Small] = OpenAi("text-embedding-3-small", input: 0.02m, cachedInput: null, output: 0m),
-            [EmbeddingModel.GeminiEmbedding001] = Google("gemini-embedding-001", input: 0.15m, cachedInput: null, output: 0m)
+            [EmbeddingModel.GeminiEmbedding001] = Google("gemini-embedding-001", input: 0.15m, cachedInput: null, output: 0m),
+            [EmbeddingModel.GeminiEmbedding2] = Google("gemini-embedding-2", input: 0.20m, cachedInput: null, output: 0m)
         };
 
     public static bool TryGetRates(AiModel model, out TokenCostRates rates)
-        => _aiModelRates.TryGetValue(model, out rates!);
+    {
+        if (!_aiModelRates.TryGetValue(model, out rates!)) return false;
+        rates = ApplyCurrentPromotion(model, rates, DateOnly.FromDateTime(DateTime.UtcNow));
+        return true;
+    }
+
+    private static TokenCostRates ApplyCurrentPromotion(AiModel model, TokenCostRates rates, DateOnly date)
+        => (model == AiModel.Gemini4Argon && date <= new DateOnly(2026, 11, 30))
+            || (model == AiModel.Gemini38Flash && date <= new DateOnly(2026, 12, 31))
+            ? rates with { InputPerMillion = rates.InputPerMillion / 2m, CachedInputPerMillion = rates.CachedInputPerMillion / 2m, OutputPerMillion = rates.OutputPerMillion / 2m }
+            : rates;
+
+    /// <summary>Standard rates on a specific UTC billing date, including dated provider launch promotions.</summary>
+    public static TokenCostRates GetRates(AiModel model, DateOnly billingDate)
+        => _aiModelRates.TryGetValue(model, out var rates)
+            ? ApplyCurrentPromotion(model, rates, billingDate)
+            : throw new ArgumentOutOfRangeException(nameof(model));
 
     public static bool TryGetRates(EmbeddingModel model, out TokenCostRates rates)
         => _embeddingModelRates.TryGetValue(model, out rates!);
@@ -150,12 +187,13 @@ public static class AiModelCostCatalog
     {
         var rates = GetRates(model);
         if (serviceTier is null or "auto" or "default") return rates;
-        if (model is not (AiModel.Gpt6Luna or AiModel.Gpt6Sol or AiModel.Gpt61Sol))
-            throw new ArgumentException("Tier pricing is registered for GPT-6 Luna and Sol models only.", nameof(model));
+        if (model is not (AiModel.Gpt6Luna or AiModel.Gpt6Sol or AiModel.Gpt61Sol or AiModel.Gpt6Astra or AiModel.Gpt61Terra))
+            throw new ArgumentException("Tier pricing is registered for GPT-6 models only.", nameof(model));
         var multiplier = serviceTier switch
         {
             "fast" or "priority" => 2m,
             "flex" => 0.5m,
+            "ultrafast" when model is AiModel.Gpt6Astra or AiModel.Gpt61Sol => 6m,
             _ => throw new ArgumentException("Unsupported service tier.", nameof(serviceTier))
         };
         return rates with
@@ -181,7 +219,9 @@ public static class AiModelCostCatalog
         => TokenCostCalculator.Estimate(usage, GetRates(model), markupPercent);
 
     private static TokenCostRates OpenAi(string model, decimal input, decimal? cachedInput, decimal output)
-        => Create("openai", model, input, cachedInput, cacheWrite: null, output, webSearch: 10m, imageSearch: 10m);
+        => Create("openai", model, input, cachedInput, cacheWrite: null, output, webSearch: 10m, imageSearch: 10m)
+            with { LongContextStartsAtTokens = model.StartsWith("gpt-6", StringComparison.Ordinal) ? 272001 : null,
+                LongContextInputMultiplier = 2m, LongContextOutputMultiplier = 1.5m };
 
     private static TokenCostRates Anthropic(string model, decimal input, decimal cacheWrite, decimal cacheRead, decimal output)
         => Create("anthropic", model, input, cacheRead, cacheWrite, output, webSearch: 10m);
@@ -190,7 +230,8 @@ public static class AiModelCostCatalog
         => Create("google", model, input, cachedInput, cacheWrite: null, output, webSearch: 14m);
 
     private static TokenCostRates Xai(string model, decimal input, decimal? cachedInput, decimal output)
-        => Create("xai", model, input, cachedInput, cacheWrite: null, output, webSearch: 5m, imageSearch: 5m, xSearch: 5m);
+        => Create("xai", model, input, cachedInput, cacheWrite: null, output, webSearch: 5m, imageSearch: 5m, xSearch: 5m)
+            with { LongContextStartsAtTokens = 200000, LongContextInputMultiplier = 2m, LongContextOutputMultiplier = 2m };
 
     private static TokenCostRates Create(
         string providerId,

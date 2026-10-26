@@ -3,6 +3,9 @@
     "description": "Generated-in-practice manifest for paid integration coverage. Keep in sync with LiveTestManifest.cs and AiModelCatalog.",
     "run_policy": "manual-only",
     "approval_required_after_large_changes": true,
-    "command": "dotnet test tests\\Ai.Tlbx.Inference.IntegrationTests\\Ai.Tlbx.Inference.IntegrationTests.csproj"
+    "command": "dotnet test tests\\Ai.Tlbx.Inference.IntegrationTests\\Ai.Tlbx.Inference.IntegrationTests.csproj",
+    "maintenance_filter": "FullyQualifiedName~CatalogMaintenanceTests",
+    "maintenance_budget_usd": 4,
+    "catalog_review_date": "2026-10-27"
   }
 ]

@@ -41,6 +41,7 @@ public sealed partial class AiInferenceClient : IAiInferenceClient
         return new CompletionResponse<string>
         {
             Content = response.Content,
+            ProviderContentJson = response.ProviderContentJson,
             Usage = response.Usage,
             Model = request.Model,
             StopReason = response.StopReason,
@@ -64,6 +65,7 @@ public sealed partial class AiInferenceClient : IAiInferenceClient
         return new CompletionResponse<T>
         {
             Content = content,
+            ProviderContentJson = response.ProviderContentJson,
             Usage = response.Usage,
             Model = request.Model,
             StopReason = response.StopReason,
@@ -90,6 +92,7 @@ public sealed partial class AiInferenceClient : IAiInferenceClient
                 }
             }
         }
+
     }
 
     private static IEnumerable<string> SplitStreamingText(string text)
@@ -173,6 +176,7 @@ public sealed partial class AiInferenceClient : IAiInferenceClient
                 Role = ChatRole.Assistant,
                 Content = response.Content,
                 ToolCalls = response.ToolCalls,
+                ProviderContentJson = response.ProviderContentJson,
             });
 
             foreach (var toolCall in response.ToolCalls)
@@ -238,6 +242,7 @@ public sealed partial class AiInferenceClient : IAiInferenceClient
                 Role = ChatRole.Assistant,
                 Content = response.Content,
                 ToolCalls = response.ToolCalls,
+                ProviderContentJson = response.ProviderContentJson,
             });
 
             foreach (var toolCall in response.ToolCalls)
@@ -278,9 +283,11 @@ public sealed partial class AiInferenceClient : IAiInferenceClient
             var pendingToolCalls = new List<ToolCallRequest>();
             var contentBuilder = new System.Text.StringBuilder();
             TokenUsage? streamUsage = null;
+            string? providerContentJson = null;
 
             await foreach (var e in StreamToolIterationAsync(provider, providerReq, request, iterations, ct).ConfigureAwait(false))
             {
+                providerContentJson = e.ProviderContentJson ?? providerContentJson;
                 if (e.TextDelta is not null)
                 {
                     contentBuilder.Append(e.TextDelta);
@@ -320,6 +327,7 @@ public sealed partial class AiInferenceClient : IAiInferenceClient
                 Role = ChatRole.Assistant,
                 Content = contentBuilder.ToString(),
                 ToolCalls = pendingToolCalls,
+                ProviderContentJson = providerContentJson,
             });
 
             foreach (var toolCall in pendingToolCalls)
@@ -517,7 +525,7 @@ public sealed partial class AiInferenceClient : IAiInferenceClient
         string? jsonSchemaOverride = null,
         IReadOnlyList<ToolDefinition>? tools = null)
     {
-        if (request.ServiceTier is not (null or "auto" or "default" or "flex" or "fast" or "priority"))
+        if (request.ServiceTier is not (null or "auto" or "default" or "flex" or "fast" or "priority" or "ultrafast"))
         {
             throw new ArgumentException("Unsupported service tier.", nameof(request));
         }
@@ -525,15 +533,40 @@ public sealed partial class AiInferenceClient : IAiInferenceClient
         {
             throw new ArgumentException("Unsupported reasoning effort.", nameof(request));
         }
-        if (request.Model == AiModel.Gpt61Sol && request.ReasoningEffort == "none")
+        if (request.Model is AiModel.Gpt61Sol or AiModel.Gpt6Astra or AiModel.Grok47 or AiModel.Grok46
+            or AiModel.ClaudeFable51 or AiModel.ClaudeOpus55 && request.ReasoningEffort == "none")
         {
-            throw new ArgumentException("GPT-6.1 Sol requires reasoning.", nameof(request));
+            throw new ArgumentException($"{request.Model.ToDisplayName()} requires reasoning.", nameof(request));
         }
-        if ((request.ServiceTier is not null || request.ReasoningEffort is not null)
-            && request.Model.GetProvider() != ProviderType.OpenAi)
+        var provider = request.Model.GetProvider();
+        if (request.ServiceTier is not null && provider != ProviderType.OpenAi)
         {
-            throw new ArgumentException("Explicit reasoning effort and service tier are OpenAI settings.", nameof(request));
+            throw new ArgumentException("Service tier is an OpenAI setting.", nameof(request));
         }
+        if (request.ServiceTier == "ultrafast" && request.Model is not (AiModel.Gpt6Astra or AiModel.Gpt61Sol))
+            throw new ArgumentException("Ultrafast is supported by GPT-6 Astra and GPT-6.1 Sol only.", nameof(request));
+        if (request.ReasoningEffort is not null)
+        {
+            if (!request.Model.SupportsThinking())
+                throw new ArgumentException("This model does not support reasoning effort.", nameof(request));
+            if (provider == ProviderType.Google && request.ReasoningEffort is not ("low" or "medium" or "high"))
+                throw new ArgumentException("Google reasoning effort must be low, medium or high.", nameof(request));
+            if (provider == ProviderType.Xai && (request.ReasoningEffort == "max"
+                || request.Model == AiModel.Grok43 && request.ReasoningEffort == "xhigh"))
+                throw new ArgumentException("Unsupported xAI reasoning effort for this model.", nameof(request));
+            if (provider == ProviderType.Xai && request.Model is not (AiModel.Grok47 or AiModel.Grok46 or AiModel.Grok43))
+                throw new ArgumentException("Explicit reasoning effort requires a current Grok model.", nameof(request));
+            if (provider == ProviderType.Anthropic && request.Model is not (AiModel.ClaudeFable51 or AiModel.ClaudeOpus55 or AiModel.ClaudeSonnet55 or AiModel.ClaudeHaiku55))
+                throw new ArgumentException("Explicit reasoning effort requires a current Claude model.", nameof(request));
+            if (request.Model == AiModel.ClaudeHaiku55 && request.ReasoningEffort is "xhigh" or "max")
+                throw new ArgumentException("Claude Haiku 5.5 supports effort up to high.", nameof(request));
+        }
+        if (request.Model is AiModel.ClaudeFable51 or AiModel.ClaudeOpus55 or AiModel.ClaudeSonnet55 or AiModel.ClaudeHaiku55
+            && (request.Temperature.HasValue || request.TopP.HasValue))
+            throw new ArgumentException("Current Claude models do not accept temperature or top_p.", nameof(request));
+        if (provider == ProviderType.Xai && request.StopSequences is { Count: > 0 }
+            && request.Model is AiModel.Grok47 or AiModel.Grok46)
+            throw new ArgumentException("Current Grok reasoning models do not accept stop sequences.", nameof(request));
         return new ProviderRequest
         {
             ModelApiName = request.Model.ToApiName(),
@@ -602,6 +635,7 @@ public sealed partial class AiInferenceClient : IAiInferenceClient
         {
             Role = message.Role,
             Content = message.Content,
+            ProviderContentJson = message.ProviderContentJson,
             ToolCallId = message.ToolCallId,
             ToolCalls = CloneToolCalls(message.ToolCalls),
             Attachments = CloneAttachments(message.Attachments),

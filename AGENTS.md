@@ -44,7 +44,7 @@ dotnet publish tests\Ai.Tlbx.Inference.AotAudit\Ai.Tlbx.Inference.AotAudit.cspro
 
 ## Build and Test Expectations
 
-- Target framework is `net9.0`.
+- Library targets `net9.0` and `net10.0`; test/audit applications target `net9.0`.
 - The repository is expected to build with zero errors and zero warnings.
 - `TreatWarningsAsErrors` is enabled, so warnings are release-blocking by default.
 - Live provider integration tests cost money and must never be run automatically.
@@ -92,7 +92,7 @@ dotnet pack src\Ai.Tlbx.Inference\Ai.Tlbx.Inference.csproj -c Release -p:Include
 .\scripts\publish-nuget.ps1 -Version X.Y.Z
 ```
 
-6. Push `main`.
+6. Push the existing default branch (`master` in this repository); do not create or rename branches for a release.
 7. Create and push tag `vX.Y.Z`.
 8. Create the GitHub release with generated notes:
 
@@ -103,3 +103,17 @@ gh release create vX.Y.Z --generate-notes
 ## Notes
 
 - The README NuGet badge updates automatically because `shields.io` reads from NuGet dynamically.
+
+## Recurring model and API maintenance
+
+Treat **"update ai.tlbx.inference"** as the complete maintenance workflow:
+
+1. Preserve unrelated work; inspect current source and published version.
+2. Compare official provider model catalogs, API guides, changelogs, retirements and prices. Cover OpenAI, Anthropic, Google and xAI; inspect relevant additional labs and record material coverage gaps in TODO.md.
+3. Add important current text/reasoning, image, audio and embedding models supported by this facade. Append enum values so persisted selections remain stable. Update capabilities, endpoint routing, prices, dated promotions, aliases and retirement notes together.
+4. Adapt existing operations to provider API changes, including tool/assistant history, signed or encrypted reasoning continuation, schemas, streaming failures and usage accounting. Preserve the single facade and AOT rules.
+5. Run the unit suite, clean Release build and Native AOT audit. Run targeted paid acceptance for changed provider operations only when covered by explicit user approval or a standing paid-test budget; honor that budget and retain usage/cost logs. Do not run the whole paid suite by default.
+6. Update README, CHANGELOG and the live-test manifest. Publish a semantically appropriate NuGet/GitHub release when there are verified changes; do not package unrelated work. Verify published artifacts and a package-only consumer. If current, report that without an empty release.
+7. Report shipped models/API fixes, version/commit, validation and actual limitations. Update the existing TODO for material follow-ups; do not create a separate maintenance report. Do not update consuming products automatically.
+
+Paid acceptance command: `dotnet test tests\Ai.Tlbx.Inference.IntegrationTests\Ai.Tlbx.Inference.IntegrationTests.csproj --filter FullyQualifiedName~CatalogMaintenanceTests`. Configure OPENAI_API_KEY, ANTHROPIC_API_KEY, GOOGLE_API_KEY and XAI_API_KEY only in the process environment; GEMINI_API_KEY can supply the Google key. Validate catalog access before spending on tests.

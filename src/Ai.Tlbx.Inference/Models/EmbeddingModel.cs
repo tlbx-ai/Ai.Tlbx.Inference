@@ -4,7 +4,8 @@ public enum EmbeddingModel
 {
     TextEmbedding3Large,
     TextEmbedding3Small,
-    GeminiEmbedding001
+    GeminiEmbedding001,
+    GeminiEmbedding2
 }
 
 public static class EmbeddingModelExtensions
@@ -14,6 +15,7 @@ public static class EmbeddingModelExtensions
         EmbeddingModel.TextEmbedding3Large => "text-embedding-3-large",
         EmbeddingModel.TextEmbedding3Small => "text-embedding-3-small",
         EmbeddingModel.GeminiEmbedding001 => "gemini-embedding-001",
+        EmbeddingModel.GeminiEmbedding2 => "gemini-embedding-2",
         _ => throw new ArgumentOutOfRangeException(nameof(model), model, null)
     };
 
@@ -22,13 +24,14 @@ public static class EmbeddingModelExtensions
         EmbeddingModel.TextEmbedding3Large => 3072,
         EmbeddingModel.TextEmbedding3Small => 1536,
         EmbeddingModel.GeminiEmbedding001 => 3072,
+        EmbeddingModel.GeminiEmbedding2 => 3072,
         _ => throw new ArgumentOutOfRangeException(nameof(model), model, null)
     };
 
     public static ProviderType GetProvider(this EmbeddingModel model) => model switch
     {
         EmbeddingModel.TextEmbedding3Large or EmbeddingModel.TextEmbedding3Small => ProviderType.OpenAi,
-        EmbeddingModel.GeminiEmbedding001 => ProviderType.Google,
+        EmbeddingModel.GeminiEmbedding001 or EmbeddingModel.GeminiEmbedding2 => ProviderType.Google,
         _ => throw new ArgumentOutOfRangeException(nameof(model), model, null)
     };
 }

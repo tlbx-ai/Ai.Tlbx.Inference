@@ -4,7 +4,6 @@ using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using Ai.Tlbx.Inference.Json;
 
 namespace Ai.Tlbx.Inference.Providers;
 
@@ -36,7 +35,7 @@ internal sealed class GoogleProvider : IProvider
         var jsonBytes = SerializeToUtf8Bytes(body);
         var url = BuildUrl(request.ModelApiName, "generateContent");
 
-        _context.Log?.Invoke(InferenceLogLevel.Debug, $"Request to {url}");
+        _context.Log?.Invoke(InferenceLogLevel.Debug, $"Request to {url.Split('?')[0]}");
 
         using var response = await _context.SendAsync(
             token => CreateHttpRequestAsync(jsonBytes, url, token),
@@ -69,6 +68,10 @@ internal sealed class GoogleProvider : IProvider
             {
                 foreach (var part in parts.EnumerateArray())
                 {
+                    if (part.TryGetProperty("thought", out var thought) && thought.ValueKind == JsonValueKind.True)
+                    {
+                        continue;
+                    }
                     if (part.TryGetProperty("text", out var textEl))
                     {
                         contentBuilder.Append(textEl.GetString());
@@ -81,10 +84,12 @@ internal sealed class GoogleProvider : IProvider
                             ? argsEl.GetRawText()
                             : "{}";
                         var thoughtSignature = ExtractThoughtSignature(part, fnCall);
+                        var nativeId = ReadFunctionCallId(fnCall);
 
                         toolCalls.Add(new ToolCallRequest
                         {
-                            Id = Guid.NewGuid().ToString("N"),
+                            Id = nativeId ?? Guid.NewGuid().ToString("N"),
+                            ProviderItemId = nativeId,
                             Name = name,
                             Arguments = args,
                             ThoughtSignature = thoughtSignature,
@@ -127,7 +132,7 @@ internal sealed class GoogleProvider : IProvider
 
         var url = BuildStreamUrl(request.ModelApiName);
 
-        _context.Log?.Invoke(InferenceLogLevel.Debug, $"Stream request to {url}");
+        _context.Log?.Invoke(InferenceLogLevel.Debug, $"Stream request to {url.Split('?')[0]}");
 
         using var response = await _context.SendAsync(
             token => CreateHttpRequestAsync(jsonBytes, url, token),
@@ -158,6 +163,10 @@ internal sealed class GoogleProvider : IProvider
                 {
                     foreach (var part in parts.EnumerateArray())
                     {
+                        if (part.TryGetProperty("thought", out var thought) && thought.ValueKind == JsonValueKind.True)
+                        {
+                            continue;
+                        }
                         if (part.TryGetProperty("text", out var textEl))
                         {
                             var text = textEl.GetString();
@@ -173,12 +182,14 @@ internal sealed class GoogleProvider : IProvider
                                 ? argsEl.GetRawText()
                                 : "{}";
                             var thoughtSignature = ExtractThoughtSignature(part, fnCall);
+                            var nativeId = ReadFunctionCallId(fnCall);
 
                             yield return new ProviderStreamEvent
                             {
                                 ToolCall = new ToolCallRequest
                                 {
-                                    Id = Guid.NewGuid().ToString("N"),
+                                    Id = nativeId ?? Guid.NewGuid().ToString("N"),
+                                    ProviderItemId = nativeId,
                                     Name = name,
                                     Arguments = args,
                                     ThoughtSignature = thoughtSignature,
@@ -233,13 +244,13 @@ internal sealed class GoogleProvider : IProvider
         }
 
         using var responseStream = await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
-        var dto = await InferenceJson.DeserializeAsync(responseStream, InferenceJsonContext.Default.GoogleEmbeddingResponseDto, ct).ConfigureAwait(false)
-            ?? throw new JsonException("Google embedding response was empty.");
+        using var doc = await JsonDocument.ParseAsync(responseStream, cancellationToken: ct).ConfigureAwait(false);
+        var root = doc.RootElement;
 
         return new ProviderEmbeddingResponse
         {
-            Embedding = dto.Embedding.Values,
-            Usage = new TokenUsage(),
+            Embedding = ParseEmbeddingValues(root.GetProperty("embedding").GetProperty("values")),
+            Usage = ReadEmbeddingUsage(root),
         };
     }
 
@@ -285,27 +296,41 @@ internal sealed class GoogleProvider : IProvider
         }
 
         using var responseStream = await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
-        var dto = await InferenceJson.DeserializeAsync(responseStream, InferenceJsonContext.Default.GoogleBatchEmbeddingResponseDto, ct).ConfigureAwait(false)
-            ?? throw new JsonException("Google batch embedding response was empty.");
-        var embeddings = new ReadOnlyMemory<float>[dto.Embeddings.Length];
-        for (var i = 0; i < dto.Embeddings.Length; i++)
+        using var doc = await JsonDocument.ParseAsync(responseStream, cancellationToken: ct).ConfigureAwait(false);
+        var root = doc.RootElement;
+        var embeddingArray = root.GetProperty("embeddings");
+        var embeddings = new ReadOnlyMemory<float>[embeddingArray.GetArrayLength()];
+        var itemUsage = new TokenUsage();
+        for (var i = 0; i < embeddings.Length; i++)
         {
-            embeddings[i] = dto.Embeddings[i].Values;
+            embeddings[i] = ParseEmbeddingValues(embeddingArray[i].GetProperty("values"));
+            itemUsage += ReadEmbeddingUsage(embeddingArray[i]);
         }
 
         return new ProviderBatchEmbeddingResponse
         {
             Embeddings = embeddings,
-            Usage = new TokenUsage(),
+            // A batch total already includes its items. Only sum item metadata when no total was reported.
+            Usage = HasEmbeddingUsage(root) ? ReadEmbeddingUsage(root) : itemUsage,
         };
     }
 
-    public async Task<byte[]> GenerateImageAsync(ProviderImageRequest request, CancellationToken ct)
-    {
-        var generationConfig = new JsonObject
+    private static bool HasEmbeddingUsage(JsonElement root)
+        => root.TryGetProperty("usageMetadata", out var metadata)
+            && metadata.ValueKind == JsonValueKind.Object
+            && metadata.TryGetProperty("promptTokenCount", out _);
+
+    private static TokenUsage ReadEmbeddingUsage(JsonElement root)
+        => new()
         {
-            ["responseModalities"] = new JsonArray("IMAGE"),
+            InputTokens = HasEmbeddingUsage(root)
+                ? root.GetProperty("usageMetadata").GetProperty("promptTokenCount").GetInt32()
+                : 0,
         };
+
+    public Task<byte[]> GenerateImageAsync(ProviderImageRequest request, CancellationToken ct)
+    {
+        var generationConfig = BuildImageGenerationConfig(request.ModelApiName, request.Size, request.Quality);
 
         var body = new JsonObject
         {
@@ -319,8 +344,62 @@ internal sealed class GoogleProvider : IProvider
             ["generationConfig"] = generationConfig,
         };
 
+        return SendImageRequestAsync(request.ModelApiName, body, ct);
+    }
+
+    public Task<byte[]> EditImageAsync(ProviderImageEditRequest request, CancellationToken ct)
+    {
+        var generationConfig = BuildImageGenerationConfig(request.ModelApiName, request.Size, request.Quality);
+        if (request.Images.Count == 0)
+        {
+            throw new ArgumentException("At least one reference image is required for image editing.", nameof(request));
+        }
+        var parts = new JsonArray();
+        foreach (var image in request.Images)
+        {
+            parts.Add((JsonNode)new JsonObject
+            {
+                ["inlineData"] = new JsonObject
+                {
+                    ["mimeType"] = image.MimeType,
+                    ["data"] = Convert.ToBase64String(image.Content.Span),
+                },
+            });
+        }
+        parts.Add((JsonNode)new JsonObject { ["text"] = request.Prompt });
+        var body = new JsonObject
+        {
+            ["contents"] = new JsonArray
+            {
+                (JsonNode)new JsonObject { ["role"] = "user", ["parts"] = parts },
+            },
+            ["generationConfig"] = generationConfig,
+        };
+        return SendImageRequestAsync(request.ModelApiName, body, ct);
+    }
+
+    private static JsonObject BuildImageGenerationConfig(string model, string? size, string? quality)
+    {
+        if (quality is not null)
+        {
+            throw new ArgumentException("Google image models do not support the Quality parameter. Use Size with a supported resolution instead.", nameof(quality));
+        }
+        var config = new JsonObject { ["responseModalities"] = new JsonArray("IMAGE") };
+        if (size is not null)
+        {
+            if (model == "gemini-2.5-flash-image" || size is not ("1K" or "2K" or "4K"))
+            {
+                throw new ArgumentException("Google image Size supports 1K, 2K, or 4K on Gemini 3 image models and Nano Banana 2.1. Omit Size for Gemini 2.5 Flash Image.", nameof(size));
+            }
+            config["imageConfig"] = new JsonObject { ["imageSize"] = size };
+        }
+        return config;
+    }
+
+    private async Task<byte[]> SendImageRequestAsync(string model, JsonObject body, CancellationToken ct)
+    {
         var jsonBytes = SerializeToUtf8Bytes(body);
-        var url = BuildUrl(request.ModelApiName, "generateContent");
+        var url = BuildUrl(model, "generateContent");
 
         using var response = await _context.SendAsync(
             token => CreateHttpRequestAsync(jsonBytes, url, token),
@@ -338,13 +417,54 @@ internal sealed class GoogleProvider : IProvider
         using var responseStream = await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
         using var doc = await JsonDocument.ParseAsync(responseStream, cancellationToken: ct).ConfigureAwait(false);
         var inlineData = FindInlineImageData(doc.RootElement)
-            ?? throw new InvalidOperationException("Google image generation response did not include image data.");
+            ?? throw new InvalidOperationException(DescribeMissingImage(doc.RootElement));
 
         return Convert.FromBase64String(inlineData);
     }
 
-    public Task<byte[]> EditImageAsync(ProviderImageEditRequest request, CancellationToken ct)
-        => throw new NotSupportedException("Google image editing is not supported by this provider.");
+    private static string DescribeMissingImage(JsonElement root)
+    {
+        var details = new List<string>();
+        if (root.TryGetProperty("promptFeedback", out var feedback)
+            && feedback.TryGetProperty("blockReason", out var blockReason)
+            && blockReason.ValueKind == JsonValueKind.String)
+        {
+            var reason = blockReason.GetString()!;
+            details.Add($"Prompt block reason: {reason[..Math.Min(reason.Length, 128)]}.");
+        }
+        var text = new StringBuilder();
+        if (root.TryGetProperty("candidates", out var candidates) && candidates.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var candidate in candidates.EnumerateArray())
+            {
+                if (candidate.TryGetProperty("finishReason", out var finishReason) && finishReason.ValueKind == JsonValueKind.String)
+                {
+                    var reason = finishReason.GetString()!;
+                    details.Add($"Finish reason: {reason[..Math.Min(reason.Length, 128)]}.");
+                }
+                if (!candidate.TryGetProperty("content", out var content)
+                    || !content.TryGetProperty("parts", out var parts) || parts.ValueKind != JsonValueKind.Array)
+                {
+                    continue;
+                }
+                foreach (var part in parts.EnumerateArray())
+                {
+                    if (part.TryGetProperty("thought", out var thought) && thought.ValueKind == JsonValueKind.True)
+                    {
+                        continue;
+                    }
+                    if (text.Length < 400 && part.TryGetProperty("text", out var partText) && partText.ValueKind == JsonValueKind.String)
+                    {
+                        var value = partText.GetString()!;
+                        text.Append(value.AsSpan(0, Math.Min(value.Length, 400 - text.Length)));
+                    }
+                }
+            }
+        }
+        if (text.Length > 0) details.Add($"Provider text: {text}");
+        return "Google image generation response did not include image data."
+            + (details.Count == 0 ? "" : $" {string.Join(" ", details)}");
+    }
 
     private JsonObject BuildRequestBody(ProviderRequest request)
     {
@@ -359,6 +479,7 @@ internal sealed class GoogleProvider : IProvider
         }
 
         var contents = new JsonArray();
+        var toolCallsById = new Dictionary<string, ToolCallRequest>(StringComparer.Ordinal);
 
         foreach (var msg in request.Messages)
         {
@@ -407,13 +528,19 @@ internal sealed class GoogleProvider : IProvider
                     }
                     foreach (var tc in msg.ToolCalls)
                     {
+                        toolCallsById[tc.Id] = tc;
+                        var functionCall = new JsonObject
+                        {
+                            ["name"] = tc.Name,
+                            ["args"] = JsonNode.Parse(tc.Arguments),
+                        };
+                        if (!string.IsNullOrWhiteSpace(tc.ProviderItemId))
+                        {
+                            functionCall["id"] = tc.ProviderItemId;
+                        }
                         var part = new JsonObject
                         {
-                            ["functionCall"] = new JsonObject
-                            {
-                                ["name"] = tc.Name,
-                                ["args"] = JsonNode.Parse(tc.Arguments),
-                            },
+                            ["functionCall"] = functionCall,
                         };
                         if (!string.IsNullOrWhiteSpace(tc.ThoughtSignature))
                         {
@@ -446,6 +573,16 @@ internal sealed class GoogleProvider : IProvider
                         resultValue = JsonValue.Create(msg.Content ?? "");
                     }
 
+                    toolCallsById.TryGetValue(msg.ToolCallId ?? "", out var matchingCall);
+                    var functionResponse = new JsonObject
+                    {
+                        ["name"] = matchingCall?.Name ?? msg.ToolCallId ?? "",
+                        ["response"] = new JsonObject { ["result"] = resultValue },
+                    };
+                    if (!string.IsNullOrWhiteSpace(matchingCall?.ProviderItemId))
+                    {
+                        functionResponse["id"] = matchingCall.ProviderItemId;
+                    }
                     contents.Add((JsonNode)new JsonObject
                     {
                         ["role"] = "user",
@@ -453,11 +590,7 @@ internal sealed class GoogleProvider : IProvider
                         {
                             (JsonNode)new JsonObject
                             {
-                                ["functionResponse"] = new JsonObject
-                                {
-                                    ["name"] = msg.ToolCallId ?? "",
-                                    ["response"] = new JsonObject { ["result"] = resultValue },
-                                },
+                                ["functionResponse"] = functionResponse,
                             },
                         },
                     });
@@ -470,6 +603,11 @@ internal sealed class GoogleProvider : IProvider
 
         var generationConfig = new JsonObject();
 
+        var isArgon = request.ModelApiName.StartsWith("gemini-4-", StringComparison.Ordinal);
+        if (isArgon && (request.Temperature.HasValue || request.TopP.HasValue))
+        {
+            throw new ArgumentException("Gemini 4 Argon does not support temperature or top-p sampling controls.", nameof(request));
+        }
         if (request.Temperature.HasValue)
         {
             generationConfig["temperature"] = request.Temperature.Value;
@@ -495,18 +633,31 @@ internal sealed class GoogleProvider : IProvider
             generationConfig["stopSequences"] = stopArray;
         }
 
-        if (request.ThinkingBudget.HasValue)
+        if (request.ReasoningEffort is not null || request.ThinkingBudget.HasValue)
         {
-            generationConfig["thinkingConfig"] = new JsonObject
+            if (request.ModelApiName.StartsWith("gemini-3", StringComparison.Ordinal) || isArgon)
             {
-                ["thinkingBudget"] = request.ThinkingBudget.Value,
-            };
+                var level = request.ReasoningEffort ?? MapThinkingBudget(request.ThinkingBudget!.Value);
+                if (level is not ("low" or "medium" or "high"))
+                {
+                    throw new ArgumentException("Gemini thinking levels supported by this client are low, medium, and high.", nameof(request));
+                }
+                generationConfig["thinkingConfig"] = new JsonObject { ["thinkingLevel"] = level.ToUpperInvariant() };
+            }
+            else
+            {
+                if (request.ReasoningEffort is not null)
+                {
+                    throw new ArgumentException("Use ThinkingBudget for Gemini models older than Gemini 3.", nameof(request));
+                }
+                generationConfig["thinkingConfig"] = new JsonObject { ["thinkingBudget"] = request.ThinkingBudget!.Value };
+            }
         }
 
         if (request.JsonSchema is not null)
         {
             generationConfig["responseMimeType"] = "application/json";
-            generationConfig["responseSchema"] = JsonNode.Parse(request.JsonSchema);
+            generationConfig["responseJsonSchema"] = JsonNode.Parse(request.JsonSchema);
         }
 
         if (generationConfig.Count > 0)
@@ -524,7 +675,7 @@ internal sealed class GoogleProvider : IProvider
                 {
                     ["name"] = t.Name,
                     ["description"] = t.Description,
-                    ["parameters"] = JsonNode.Parse(t.ParametersSchema.GetRawText()),
+                    ["parametersJsonSchema"] = JsonNode.Parse(t.ParametersSchema.GetRawText()),
                 });
             }
             tools.Add((JsonNode)new JsonObject { ["function_declarations"] = declarations });
@@ -542,6 +693,17 @@ internal sealed class GoogleProvider : IProvider
 
         return body;
     }
+
+    private static string MapThinkingBudget(int budget) => budget switch
+    {
+        <= 1024 => "low",
+        <= 8192 => "medium",
+        _ => "high",
+    };
+
+    private static string? ReadFunctionCallId(JsonElement functionCall)
+        => functionCall.TryGetProperty("id", out var id) && id.ValueKind == JsonValueKind.String
+            && !string.IsNullOrWhiteSpace(id.GetString()) ? id.GetString() : null;
 
     private string BuildUrl(string model, string method)
     {
@@ -648,6 +810,10 @@ internal sealed class GoogleProvider : IProvider
 
             foreach (var part in parts.EnumerateArray())
             {
+                if (part.TryGetProperty("thought", out var thought) && thought.ValueKind == JsonValueKind.True)
+                {
+                    continue;
+                }
                 if (TryGetInlineData(part, out var inlineData) &&
                     inlineData.TryGetProperty("data", out var data) &&
                     !string.IsNullOrWhiteSpace(data.GetString()))
@@ -777,6 +943,10 @@ internal sealed class GoogleProvider : IProvider
 
     private static string? BuildDiagnosticNote(string content, string? stopReason, TokenUsage usage)
     {
+        if (string.Equals(stopReason, "CONTINUATION", StringComparison.OrdinalIgnoreCase))
+        {
+            return "Google paused at a per-request output limit. Automatic long-decode continuation is not supported by this client.";
+        }
         if (string.IsNullOrWhiteSpace(content) &&
             string.Equals(stopReason, "MAX_TOKENS", StringComparison.OrdinalIgnoreCase) &&
             usage.ThinkingTokens > 0)

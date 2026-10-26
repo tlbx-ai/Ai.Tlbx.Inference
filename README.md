@@ -14,7 +14,7 @@ Trim-friendly .NET AI inference client for OpenAI, Anthropic, Google, and xAI, b
 - **Model registry** — first-class `AiModelCatalog` descriptors with endpoint/capability metadata
 - **Tool calling** — unified tool loop with streaming support, lives once in the facade
 - **Embeddings** — OpenAI and Google embedding models with batch support
-- **Image generation** — Google Gemini image generation via `gemini-2.5-flash-image`
+- **Image generation and editing** — GPT Image 2.5 Sunburst/Flare and Google Nano Banana 2.1, with multiple reference images
 - **Token metering** — `TokenUsage` on every response, with reasoning retained as a diagnostic subset of billed output tokens
 - **Grounded search** — provider-native web/X/image search with normalized citations, images, search queries, and billable tool usage
 - **Resilience** — Polly v8 retry and timeout handling wired into provider HTTP execution
@@ -43,6 +43,12 @@ Build with a serviced .NET SDK. SourceLink is supplied by the SDK; an explicit o
 ### OpenAI
 | Model | Enum | Context |
 |-------|------|---------|
+| GPT-6 Astra | `AiModel.Gpt6Astra` | 1.05M |
+| GPT-6.1 Sol | `AiModel.Gpt61Sol` | 1.05M |
+| GPT-6.1 Terra | `AiModel.Gpt61Terra` | 1.05M |
+| GPT-6 Sol | `AiModel.Gpt6Sol` | 1.05M |
+| GPT-6 Luna | `AiModel.Gpt6Luna` | 1.05M |
+| Chat Latest | `AiModel.ChatLatest` | 400k |
 | GPT-5.2 | `AiModel.Gpt52` | 400k |
 | GPT-5.2 Pro | `AiModel.Gpt52Pro` | 400k |
 | GPT-5.2 Chat | `AiModel.Gpt52Chat` | 128k |
@@ -53,6 +59,10 @@ Build with a serviced .NET SDK. SourceLink is supplied by the SDK; an explicit o
 ### Anthropic
 | Model | Enum | Context |
 |-------|------|---------|
+| Claude Fable 5.1 | `AiModel.ClaudeFable51` | 1M |
+| Claude Opus 5.5 | `AiModel.ClaudeOpus55` | 1M |
+| Claude Sonnet 5.5 | `AiModel.ClaudeSonnet55` | 1M |
+| Claude Haiku 5.5 | `AiModel.ClaudeHaiku55` | 1M |
 | Claude Opus 4.6 | `AiModel.ClaudeOpus46` | 200k |
 | Claude Sonnet 4.6 | `AiModel.ClaudeSonnet46` | 200k |
 | Claude Haiku 4.5 | `AiModel.ClaudeHaiku45` | 200k |
@@ -60,6 +70,10 @@ Build with a serviced .NET SDK. SourceLink is supplied by the SDK; an explicit o
 ### Google
 | Model | Enum | Context |
 |-------|------|---------|
+| Gemini 4 Argon | `AiModel.Gemini4Argon` | 1M unified input/output |
+| Gemini 3.8 Flash | `AiModel.Gemini38Flash` | 1M |
+| Gemini 3.5 Flash-Lite | `AiModel.Gemini35FlashLite` | 1M |
+| Gemini 3.1 Flash-Lite | `AiModel.Gemini31FlashLite` | 1M |
 | Gemini 3.5 Flash | `AiModel.Gemini35Flash` | 1M |
 | Gemini 3 Flash Preview | `AiModel.Gemini3FlashPreview` | 1M |
 | Gemini 3.1 Pro Preview | `AiModel.Gemini31ProPreview` | 1M |
@@ -68,7 +82,10 @@ Build with a serviced .NET SDK. SourceLink is supplied by the SDK; an explicit o
 ### xAI
 | Model | Enum | Context |
 |-------|------|---------|
-| Grok 4.1 Fast | `AiModel.Grok41Fast` | 2M |
+| Grok 4.7 | `AiModel.Grok47` | 500k |
+| Grok 4.6 | `AiModel.Grok46` | 500k |
+| Grok 4.3 | `AiModel.Grok43` | 1M |
+| Grok 4.1 Fast (retired alias, redirects to 4.3) | `AiModel.Grok41Fast` | 1M |
 | Grok 4 | `AiModel.Grok4` | 256k |
 
 ### Embeddings
@@ -77,6 +94,17 @@ Build with a serviced .NET SDK. SourceLink is supplied by the SDK; an explicit o
 | text-embedding-3-large | `EmbeddingModel.TextEmbedding3Large` | 3072 | OpenAI |
 | text-embedding-3-small | `EmbeddingModel.TextEmbedding3Small` | 1536 | OpenAI |
 | gemini-embedding-001 | `EmbeddingModel.GeminiEmbedding001` | 3072 | Google |
+| gemini-embedding-2 | `EmbeddingModel.GeminiEmbedding2` | 3072 | Google |
+
+Provider catalogs and API contracts reviewed on **2026-10-27** against [OpenAI](https://developers.openai.com/api/docs/models), [Anthropic](https://platform.claude.com/docs/en/models/overview), [Google](https://ai.google.dev/gemini-api/docs/models), and [xAI](https://docs.x.ai/developers/models).
+
+Current Claude models use adaptive thinking and native JSON outputs. Set `ReasoningEffort` for current Claude, Google and Grok models as well as OpenAI; model-specific invalid settings fail before HTTP. Astra and Sol 6.1 also accept `ServiceTier = "ultrafast"`. Tool loops preserve signed/encrypted continuation data. When managing assistant history manually, retain `CompletionResponse.ProviderContentJson` on the corresponding `ChatMessage` unchanged.
+
+Argon long decodes require explicit continuation; this client reports `CONTINUATION` without automatically starting more paid requests. Gemini Embedding 2 vectors are incompatible with `001`: re-embed existing data when switching models. Embedding 2 currently exposes text inputs through this facade.
+
+Image model choices include `GptImage25Sunburst`, `GptImage25Flare`, `GeminiNanoBanana21`, `Gemini31FlashImage`, and `Gemini3ProImage`. Google image generation/editing accepts `Size = "1K"`, `"2K"`, or `"4K"` for the modern image models; `Quality` is an OpenAI-only setting. Existing model enum values and default selections are preserved.
+
+Cost estimates apply the provider's prompt-length pricing to the whole request (Haiku 5.5 above 100k, current Grok from 200k, GPT-6 above 272k), include Ultrafast pricing, and expire the published Argon/3.8 Flash launch discounts automatically. Use per-call usage for tier/context-sensitive accounting; accumulated tool-loop usage cannot reconstruct individual request pricing. These remain estimates of global standard token rates, excluding regional premiums and unsupported billing options.
 
 ## Installation
 

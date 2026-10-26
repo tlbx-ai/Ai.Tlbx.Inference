@@ -1,5 +1,39 @@
 # Changelog
 
+## 2.7.0 - 2026-10-27
+
+### Added
+
+- GPT-6 Astra, GPT-6.1 Terra and Chat Latest; Claude Fable 5.1 and Opus/Sonnet/Haiku 5.5; Gemini 4 Argon, 3.8 Flash and stable 3.5/3.1 Flash-Lite; Grok 4.7, 4.6 and 4.3.
+- GPT Image 2.5 Sunburst/Flare, Nano Banana 2.1, Gemini 3.1 Flash Image and 3 Pro Image, plus Gemini Embedding 2 text embeddings.
+- Google image editing with multiple references and explicit 1K/2K/4K resolutions.
+- Voxtral 3 transcription/speech through OpenRouter or Mistral, and the global Vertex endpoint correction from the intervening source commits.
+- Context-sensitive prices, expiring Google launch discounts and OpenAI Ultrafast tier support.
+- Bounded manual maintenance acceptance and a recurring update workflow in the agent instructions.
+
+### Fixed
+
+- Current Claude adaptive thinking, effort and native structured output without replacing caller tools.
+- Complete signed Claude tool history and encrypted OpenAI/xAI reasoning continuation, including streaming.
+- Ordinary assistant history and JSON schema output in Responses requests; failed/incomplete stream handling and reported failure usage.
+- Gemini thinking levels, JSON schemas, native tool IDs/names/signatures, thought filtering, and embedding token accounting.
+- Incorrect non-reasoning Grok 4.1 alias; retirement warnings explain redirects and billing changes.
+- Google debug URLs no longer include the API key.
+
+### Limits
+
+- Argon long-decode continuation is reported but not followed automatically. Gemini Embedding 2 vectors require re-embedding existing 001 data.
+- New text provider integrations, including Mistral, remain explicit follow-up work; Mistral audio is retained.
+
+## 2.6.0 - 2026-09-30
+
+- GPT-6 Luna/Sol and GPT-6.1 Sol model metadata, Responses routing and reasoning/service-tier settings.
+
+## 2.5.0 - 2026-09-11
+
+- Per-provider-call tool-iteration accounting via `IToolIterationObserver` for normal, typed and streaming tool loops.
+- NuGet publication failures no longer disclose credentials.
+
 ## 2.4.0 - 2026-08-20
 
 ### Added

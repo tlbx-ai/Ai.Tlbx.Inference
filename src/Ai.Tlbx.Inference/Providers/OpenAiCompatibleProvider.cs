@@ -180,6 +180,7 @@ internal abstract class OpenAiCompatibleProvider : IProvider
                 ToolCalls = toolCalls,
                 DiagnosticNote = BuildResponsesDiagnosticNote(contentBuilder.ToString(), stopReason, usage),
                 Grounding = grounding,
+                ProviderContentJson = ExtractResponsesReasoningItems(root),
             };
         }
         finally
@@ -288,6 +289,7 @@ internal abstract class OpenAiCompatibleProvider : IProvider
                         break;
 
                     case "response.completed":
+                    case "response.incomplete":
                         if (root.TryGetProperty("response", out var resp))
                         {
                             var completedText = ExtractResponsesOutputText(resp);
@@ -309,6 +311,7 @@ internal abstract class OpenAiCompatibleProvider : IProvider
                                 {
                                     Usage = ParseResponsesUsage(usageEl) with { ServiceTier = ReadServiceTier(resp) },
                                     Grounding = ParseResponsesGrounding(resp, request),
+                                    ProviderContentJson = ExtractResponsesReasoningItems(resp),
                                 };
                             }
                             else
@@ -316,10 +319,24 @@ internal abstract class OpenAiCompatibleProvider : IProvider
                                 yield return new ProviderStreamEvent
                                 {
                                     Grounding = ParseResponsesGrounding(resp, request),
+                                    ProviderContentJson = ExtractResponsesReasoningItems(resp),
                                 };
                             }
                         }
                         break;
+
+                    case "response.failed":
+                    case "error":
+                        if (root.TryGetProperty("response", out var failedResponse) &&
+                            failedResponse.TryGetProperty("usage", out var failedUsage) &&
+                            failedUsage.ValueKind == JsonValueKind.Object)
+                        {
+                            yield return new ProviderStreamEvent
+                            {
+                                Usage = ParseResponsesUsage(failedUsage) with { ServiceTier = ReadServiceTier(failedResponse) },
+                            };
+                        }
+                        throw new HttpRequestException($"Responses stream failed: {data}");
                 }
             }
         }
@@ -699,6 +716,8 @@ internal abstract class OpenAiCompatibleProvider : IProvider
                     });
                     break;
                 case ChatRole.Assistant when msg.ToolCalls is { Count: > 0 }:
+                    AddResponsesReasoningItems(input, msg.ProviderContentJson);
+                    AddAssistantText(input, msg.Content);
                     foreach (var tc in msg.ToolCalls)
                     {
                         var functionCall = new JsonObject
@@ -715,6 +734,8 @@ internal abstract class OpenAiCompatibleProvider : IProvider
                     }
                     break;
                 case ChatRole.Assistant:
+                    AddResponsesReasoningItems(input, msg.ProviderContentJson);
+                    AddAssistantText(input, msg.Content);
                     break;
                 case ChatRole.Tool:
                     input.Add((JsonNode)new JsonObject
@@ -802,15 +823,16 @@ internal abstract class OpenAiCompatibleProvider : IProvider
         if (tools.Count > 0)
             body["tools"] = tools;
 
+        var include = new JsonArray("reasoning.encrypted_content");
         if (enableWebSearch && !IsXai)
         {
-            var include = new JsonArray("web_search_call.action.sources");
+            include.Add((JsonNode)JsonValue.Create("web_search_call.action.sources")!);
             if (grounding?.EnableImageSearch == true)
             {
                 include.Add((JsonNode)JsonValue.Create("web_search_call.results")!);
             }
-            body["include"] = include;
         }
+        body["include"] = include;
 
         if (request.Temperature.HasValue)
             body["temperature"] = request.Temperature.Value;
@@ -833,7 +855,68 @@ internal abstract class OpenAiCompatibleProvider : IProvider
         if (request.TopP.HasValue)
             body["top_p"] = request.TopP.Value;
 
+        if (request.JsonSchema is not null)
+        {
+            body["text"] = new JsonObject
+            {
+                ["format"] = new JsonObject
+                {
+                    ["type"] = "json_schema",
+                    ["name"] = "response",
+                    ["strict"] = true,
+                    ["schema"] = JsonNode.Parse(request.JsonSchema),
+                },
+            };
+        }
+
         return body;
+    }
+
+    private static void AddAssistantText(JsonArray input, string? content)
+    {
+        if (string.IsNullOrEmpty(content))
+            return;
+
+        input.Add((JsonNode)new JsonObject
+        {
+            ["role"] = "assistant",
+            ["content"] = new JsonArray
+            {
+                (JsonNode)new JsonObject { ["type"] = "output_text", ["text"] = content },
+            },
+        });
+    }
+
+    private static string? ExtractResponsesReasoningItems(JsonElement response)
+    {
+        if (!response.TryGetProperty("output", out var output))
+            return null;
+
+        var reasoning = new JsonArray();
+        foreach (var item in output.EnumerateArray())
+        {
+            if (item.TryGetProperty("type", out var type) && type.GetString() == "reasoning")
+                reasoning.Add(JsonNode.Parse(item.GetRawText()));
+        }
+
+        return reasoning.Count == 0 ? null : reasoning.ToJsonString();
+    }
+
+    private static void AddResponsesReasoningItems(JsonArray input, string? providerContentJson)
+    {
+        if (string.IsNullOrWhiteSpace(providerContentJson))
+            return;
+
+        using var document = JsonDocument.Parse(providerContentJson);
+        if (document.RootElement.ValueKind != JsonValueKind.Array)
+            return;
+
+        foreach (var item in document.RootElement.EnumerateArray())
+        {
+            if (item.ValueKind == JsonValueKind.Object &&
+                item.TryGetProperty("type", out var type) && type.GetString() == "reasoning")
+                input.Add(JsonNode.Parse(item.GetRawText()));
+        }
     }
 
     private static bool UseResponsesApiForRequest(ProviderRequest request)

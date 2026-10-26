@@ -94,20 +94,80 @@ public static class AiModelCatalog
                 supportsThinking: false, supportsChatCompletionsApi: false, supportsResponsesApi: false,
                 isPreview: true, defaultSmokeMaxTokens: 128, retrySmokeMaxTokens: 256),
             [AiModel.Grok41Fast] = Create(
-                AiModel.Grok41Fast, "grok-4-1-fast-reasoning", "Grok 4.1 Fast", ProviderType.Xai, 2000000,
+                AiModel.Grok41Fast, "grok-4-1-fast-reasoning", "Grok 4.1 Fast", ProviderType.Xai, 1000000,
                 ModelEndpointFamily.ChatCompletions,
                 supportsThinking: true, supportsChatCompletionsApi: true, supportsResponsesApi: false,
-                defaultSmokeMaxTokens: 128, retrySmokeMaxTokens: 256),
+                defaultSmokeMaxTokens: 128, retrySmokeMaxTokens: 256,
+                notes: "Retired 2026-05-15; provider redirects this identifier to Grok 4.3 at its current prices. Prefer Grok43 or Grok47."),
             [AiModel.Grok41FastNonReasoning] = Create(
-                AiModel.Grok41FastNonReasoning, "grok-4-1-fast", "Grok 4.1 Fast (Non-Reasoning)", ProviderType.Xai, 2000000,
+                AiModel.Grok41FastNonReasoning, "grok-4-1-fast-non-reasoning", "Grok 4.1 Fast (Non-Reasoning)", ProviderType.Xai, 1000000,
                 ModelEndpointFamily.ChatCompletions,
                 supportsThinking: false, supportsChatCompletionsApi: true, supportsResponsesApi: false,
-                defaultSmokeMaxTokens: 128, retrySmokeMaxTokens: 256),
+                defaultSmokeMaxTokens: 128, retrySmokeMaxTokens: 256,
+                notes: "Retired 2026-05-15; provider redirects this identifier to Grok 4.3 with reasoning disabled. Prefer Grok43 with ReasoningEffort=none."),
             [AiModel.Grok4] = Create(
                 AiModel.Grok4, "grok-4", "Grok 4", ProviderType.Xai, 256000,
                 ModelEndpointFamily.ChatCompletions,
                 supportsThinking: true, supportsChatCompletionsApi: true, supportsResponsesApi: false,
                 defaultSmokeMaxTokens: 128, retrySmokeMaxTokens: 256),
+            // Official provider catalog review: 2026-10-27. Append enum values in AiModel.
+            [AiModel.Gpt6Astra] = Create(
+                AiModel.Gpt6Astra, "gpt-6-astra", "GPT-6 Astra", ProviderType.OpenAi, 1050000,
+                ModelEndpointFamily.Responses, true, true, true, 2048, 4096,
+                requiresReasoningBudgetHeadroom: true),
+            [AiModel.Gpt61Terra] = Create(
+                AiModel.Gpt61Terra, "gpt-6.1-terra", "GPT-6.1 Terra", ProviderType.OpenAi, 1050000,
+                ModelEndpointFamily.Responses, true, true, true, 2048, 4096,
+                requiresReasoningBudgetHeadroom: true),
+            [AiModel.ChatLatest] = Create(
+                AiModel.ChatLatest, "chat-latest", "Chat Latest", ProviderType.OpenAi, 400000,
+                ModelEndpointFamily.Responses, false, true, true, 256, 512,
+                notes: "Rolling alias for the current ChatGPT Instant model; behavior may change."),
+            [AiModel.ClaudeFable51] = Create(
+                AiModel.ClaudeFable51, "claude-fable-5-1", "Claude Fable 5.1", ProviderType.Anthropic, 1000000,
+                ModelEndpointFamily.AnthropicMessages, true, false, false, 2048, 4096,
+                requiresReasoningBudgetHeadroom: true),
+            [AiModel.ClaudeOpus55] = Create(
+                AiModel.ClaudeOpus55, "claude-opus-5-5", "Claude Opus 5.5", ProviderType.Anthropic, 1000000,
+                ModelEndpointFamily.AnthropicMessages, true, false, false, 2048, 4096,
+                requiresReasoningBudgetHeadroom: true),
+            [AiModel.ClaudeSonnet55] = Create(
+                AiModel.ClaudeSonnet55, "claude-sonnet-5-5", "Claude Sonnet 5.5", ProviderType.Anthropic, 1000000,
+                ModelEndpointFamily.AnthropicMessages, true, false, false, 2048, 4096,
+                requiresReasoningBudgetHeadroom: true),
+            [AiModel.ClaudeHaiku55] = Create(
+                AiModel.ClaudeHaiku55, "claude-haiku-5-5", "Claude Haiku 5.5", ProviderType.Anthropic, 1000000,
+                ModelEndpointFamily.AnthropicMessages, true, false, false, 2048, 4096,
+                requiresReasoningBudgetHeadroom: true),
+            [AiModel.Gemini4Argon] = Create(
+                AiModel.Gemini4Argon, "gemini-4-argon", "Gemini 4 Argon", ProviderType.Google, 1048576,
+                ModelEndpointFamily.GoogleGenerateContent, true, false, false, 2048, 4096,
+                requiresReasoningBudgetHeadroom: true,
+                notes: "Unified input/output window. REST output cap 32,768; streaming cap 65,536. Long decodes need explicit continuation."),
+            [AiModel.Gemini38Flash] = Create(
+                AiModel.Gemini38Flash, "gemini-3.8-flash", "Gemini 3.8 Flash", ProviderType.Google, 1048576,
+                ModelEndpointFamily.GoogleGenerateContent, true, false, false, 2048, 4096,
+                requiresReasoningBudgetHeadroom: true),
+            [AiModel.Gemini35FlashLite] = Create(
+                AiModel.Gemini35FlashLite, "gemini-3.5-flash-lite", "Gemini 3.5 Flash-Lite", ProviderType.Google, 1048576,
+                ModelEndpointFamily.GoogleGenerateContent, true, false, false, 1024, 2048,
+                requiresReasoningBudgetHeadroom: true),
+            [AiModel.Gemini31FlashLite] = Create(
+                AiModel.Gemini31FlashLite, "gemini-3.1-flash-lite", "Gemini 3.1 Flash-Lite", ProviderType.Google, 1048576,
+                ModelEndpointFamily.GoogleGenerateContent, true, false, false, 1024, 2048,
+                requiresReasoningBudgetHeadroom: true),
+            [AiModel.Grok47] = Create(
+                AiModel.Grok47, "grok-4.7", "Grok 4.7", ProviderType.Xai, 500000,
+                ModelEndpointFamily.Responses, true, true, true, 2048, 4096,
+                requiresReasoningBudgetHeadroom: true),
+            [AiModel.Grok46] = Create(
+                AiModel.Grok46, "grok-4.6", "Grok 4.6", ProviderType.Xai, 500000,
+                ModelEndpointFamily.Responses, true, true, true, 2048, 4096,
+                requiresReasoningBudgetHeadroom: true),
+            [AiModel.Grok43] = Create(
+                AiModel.Grok43, "grok-4.3", "Grok 4.3", ProviderType.Xai, 1000000,
+                ModelEndpointFamily.Responses, true, true, true, 2048, 4096,
+                requiresReasoningBudgetHeadroom: true),
         };
 
     public static IReadOnlyList<AiModelDescriptor> All { get; } = _models.Values.OrderBy(m => (int)m.Provider).ThenBy(m => m.DisplayName).ToArray();

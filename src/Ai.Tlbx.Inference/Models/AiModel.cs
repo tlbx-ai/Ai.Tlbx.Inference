@@ -29,7 +29,23 @@ public enum AiModel
     // Keep existing enum values stable for persisted model selections.
     Gpt6Luna,
     Gpt6Sol,
-    Gpt61Sol
+    Gpt61Sol,
+
+    // Append new entries: numeric values are persisted by consumers.
+    Gpt6Astra,
+    Gpt61Terra,
+    ChatLatest,
+    ClaudeFable51,
+    ClaudeOpus55,
+    ClaudeSonnet55,
+    ClaudeHaiku55,
+    Gemini4Argon,
+    Gemini38Flash,
+    Gemini35FlashLite,
+    Gemini31FlashLite,
+    Grok47,
+    Grok46,
+    Grok43
 }
 
 public static class AiModelExtensions

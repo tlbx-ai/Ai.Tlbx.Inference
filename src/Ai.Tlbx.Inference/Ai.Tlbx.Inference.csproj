@@ -10,7 +10,7 @@
     <RepositoryType>git</RepositoryType>
     <PackageTags>ai;inference;openai;anthropic;google;gemini;xai;grok;llm;embeddings;tool-calling;streaming;attachments;aot;trimming</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>
-    <PackageReleaseNotes>Add optional per-provider-call accounting in typed, untyped and streaming tool dialogs, preserving reported usage on later failure or cancellation. Use the serviced SDK's built-in SourceLink instead of the vulnerable legacy package.</PackageReleaseNotes>
+    <PackageReleaseNotes>Update current OpenAI, Claude, Gemini and Grok catalogs and API contracts; preserve signed/encrypted tool history and Responses assistant context; add current image models, Google multi-image editing and Embedding 2; refresh usage, context-sensitive pricing and bounded maintenance acceptance.</PackageReleaseNotes>
     <PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <NoWarn>CS1591</NoWarn>

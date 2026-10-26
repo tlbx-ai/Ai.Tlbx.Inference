@@ -1,5 +1,9 @@
 # TODO
 
+- [ ] Evaluate adding text inference for Mistral Large 4/Medium 3.5/Small 4; AddMistral currently configures Voxtral audio only. Review other major labs against concrete consumer demand.
+- [ ] Add opt-in bounded Argon long-decode continuation; current REST/streaming calls report the provider continuation boundary without starting more paid calls.
+- [ ] Extend embedding inputs beyond text for Gemini Embedding 2 when a consumer needs multimodal vectors.
+
 - [x] Add a first-class AI model registry with explicit capability metadata.
 - [x] Route providers by model capability instead of ad hoc model-name checks where practical.
 - [x] Add built-in smoke-test request profiles for low-cost live validation.
