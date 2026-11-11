@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.8.0 - 2026-11-11
+
+- Dual-target .NET 10 and .NET 11; .NET 9 is no longer targeted.
+- Run unit tests on both supported runtimes and validate Native AOT.
+
+
 ## 2.7.0 - 2026-10-27
 
 ### Added

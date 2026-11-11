@@ -3,7 +3,7 @@
 [![NuGet](https://img.shields.io/nuget/v/Ai.Tlbx.Inference.svg)](https://www.nuget.org/packages/Ai.Tlbx.Inference)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-Trim-friendly .NET AI inference client for OpenAI, Anthropic, Google, and xAI, built around a single inference facade.
+Dual-targeted .NET 10 / .NET 11 AI inference client for OpenAI, Anthropic, Google, and xAI, built around a single inference facade.
 
 ## Features
 

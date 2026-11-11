@@ -8,11 +8,11 @@ namespace Ai.Tlbx.Inference.Tests;
 public sealed class Gpt6Tests
 {
     [Theory]
-    [InlineData(AiModel.Gpt6Luna, "gpt-6-luna", 0.2, 0.02, 1)]
-    [InlineData(AiModel.Gpt6Sol, "gpt-6-sol", 4, 0.4, 20)]
-    [InlineData(AiModel.Gpt61Sol, "gpt-6.1-sol", 4, 0.2, 20)]
+    [InlineData(AiModel.Gpt6Luna, "gpt-6-luna", "0.2", "0.02", "1")]
+    [InlineData(AiModel.Gpt6Sol, "gpt-6-sol", "4", "0.4", "20")]
+    [InlineData(AiModel.Gpt61Sol, "gpt-6.1-sol", "4", "0.2", "20")]
     public async Task Facade_UsesResponsesWithHighReasoningAndFastTier(
-        AiModel model, string apiName, double inputRate, double cacheRate, double outputRate)
+        AiModel model, string apiName, string inputRate, string cacheRate, string outputRate)
     {
         var calls = 0;
         using var http = new HttpClient(new MockHttpHandler(async request =>
@@ -46,9 +46,9 @@ public sealed class Gpt6Tests
         Assert.Equal("default", response.Usage.ServiceTier);
         Assert.Equal(30, response.Usage.ThinkingTokens);
         var rates = AiModelCostCatalog.GetRates(model, "fast");
-        Assert.Equal((decimal)inputRate, rates.InputPerMillion);
-        Assert.Equal((decimal)cacheRate, rates.CachedInputPerMillion);
-        Assert.Equal((decimal)outputRate, rates.OutputPerMillion);
+        Assert.Equal(decimal.Parse(inputRate, System.Globalization.CultureInfo.InvariantCulture), rates.InputPerMillion);
+        Assert.Equal(decimal.Parse(cacheRate, System.Globalization.CultureInfo.InvariantCulture), rates.CachedInputPerMillion);
+        Assert.Equal(decimal.Parse(outputRate, System.Globalization.CultureInfo.InvariantCulture), rates.OutputPerMillion);
         Assert.Equal(ModelEndpointFamily.Responses, AiModelCatalog.Get(model).PreferredEndpoint);
     }
 

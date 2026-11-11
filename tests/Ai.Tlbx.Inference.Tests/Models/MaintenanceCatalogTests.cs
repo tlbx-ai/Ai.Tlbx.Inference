@@ -37,14 +37,14 @@ public sealed class MaintenanceCatalogTests
     }
 
     [Theory]
-    [InlineData(AiModel.ClaudeHaiku55, 100000, 0.0105)]
-    [InlineData(AiModel.ClaudeHaiku55, 100001, 0.0525005)]
-    [InlineData(AiModel.Grok47, 199999, 0.405998)]
-    [InlineData(AiModel.Grok47, 200000, 0.812)]
-    public void ContextPriceBoundaryAppliesToEntireRequest(AiModel model, int input, double expected)
+    [InlineData(AiModel.ClaudeHaiku55, 100000, "0.0105")]
+    [InlineData(AiModel.ClaudeHaiku55, 100001, "0.0525005")]
+    [InlineData(AiModel.Grok47, 199999, "0.405998")]
+    [InlineData(AiModel.Grok47, 200000, "0.812")]
+    public void ContextPriceBoundaryAppliesToEntireRequest(AiModel model, int input, string expected)
     {
         var estimate = new TokenUsage { InputTokens = input, OutputTokens = 1000 }.EstimateCost(model);
-        Assert.Equal((decimal)expected, estimate.ProviderCost);
+        Assert.Equal(decimal.Parse(expected, System.Globalization.CultureInfo.InvariantCulture), estimate.ProviderCost);
     }
 
     [Fact]

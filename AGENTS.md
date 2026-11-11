@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This repository is `Ai.Tlbx.Inference`, a .NET 9 library centered on a single public inference facade. Agents working here should preserve the existing API shape, keep the code AOT- and trimming-safe, and treat build cleanliness as a release requirement rather than a nice-to-have.
+This repository is `Ai.Tlbx.Inference`, a .NET 10/11 library centered on a single public inference facade. Agents working here should preserve the existing API shape, keep the code AOT- and trimming-safe, and treat build cleanliness as a release requirement rather than a nice-to-have.
 
 ## Core Rules
 
@@ -39,12 +39,12 @@ This library is explicitly built for AOT/trimming compatibility.
 Use this when validating the AOT path:
 
 ```powershell
-dotnet publish tests\Ai.Tlbx.Inference.AotAudit\Ai.Tlbx.Inference.AotAudit.csproj -c Release -r win-x64
+dotnet publish tests\Ai.Tlbx.Inference.AotAudit\Ai.Tlbx.Inference.AotAudit.csproj -c Release -f net11.0 -r win-x64
 ```
 
 ## Build and Test Expectations
 
-- Library targets `net9.0` and `net10.0`; test/audit applications target `net9.0`.
+- Library targets `net10.0` and `net11.0`; unit tests and AOT audit target both frameworks.
 - The repository is expected to build with zero errors and zero warnings.
 - `TreatWarningsAsErrors` is enabled, so warnings are release-blocking by default.
 - Live provider integration tests cost money and must never be run automatically.
