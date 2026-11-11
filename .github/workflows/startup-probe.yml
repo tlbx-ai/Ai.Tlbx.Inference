@@ -1,0 +1,19 @@
+name: Actions startup probe
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  runner:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 3
+    steps:
+      - name: Confirm runner startup
+        run: echo "Runner started without environment or external actions"
