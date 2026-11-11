@@ -7,6 +7,10 @@ permissions:
   contents: read
   id-token: write
 
+concurrency:
+  group: nuget-publish
+  cancel-in-progress: false
+
 jobs:
   runner:
     environment: nuget
