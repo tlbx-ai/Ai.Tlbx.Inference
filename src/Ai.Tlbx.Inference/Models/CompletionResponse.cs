@@ -10,4 +10,6 @@ public sealed record CompletionResponse<T>
     public string? StopReason { get; init; }
     public CompletionDiagnostics? Diagnostics { get; init; }
     public GroundingResult? Grounding { get; init; }
+    public CompactionState? CompactionState { get; init; }
+    public IReadOnlyList<ConversationCompaction> Compactions { get; init; } = [];
 }

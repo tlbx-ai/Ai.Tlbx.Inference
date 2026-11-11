@@ -8,6 +8,7 @@ public sealed record TokenCostRates
     public required decimal InputPerMillion { get; init; }
     public decimal? CachedInputPerMillion { get; init; }
     public decimal? CacheWriteInputPerMillion { get; init; }
+    public decimal? CacheWrite12HourInputPerMillion { get; init; }
     public required decimal OutputPerMillion { get; init; }
     public decimal? WebSearchPerThousand { get; init; }
     public decimal? ImageSearchPerThousand { get; init; }
@@ -66,7 +67,8 @@ public static class TokenCostCalculator
         var tokenCost = inputMultiplier * (
             CostForTokens(uncachedInputTokens, rates.InputPerMillion) +
             CostForTokens(cacheReadTokens, rates.CachedInputPerMillion ?? rates.InputPerMillion) +
-            CostForTokens(cacheWriteTokens, rates.CacheWriteInputPerMillion ?? rates.InputPerMillion)) +
+            CostForTokens(Math.Max(0, cacheWriteTokens - Math.Max(0, usage.CacheWrite12HourTokens)), rates.CacheWriteInputPerMillion ?? rates.InputPerMillion) +
+            CostForTokens(Math.Min(cacheWriteTokens, Math.Max(0, usage.CacheWrite12HourTokens)), rates.CacheWrite12HourInputPerMillion ?? rates.CacheWriteInputPerMillion ?? rates.InputPerMillion)) +
             outputMultiplier * CostForTokens(outputTokens, rates.OutputPerMillion);
 
         var hostedToolCost =
@@ -201,6 +203,7 @@ public static class AiModelCostCatalog
             InputPerMillion = rates.InputPerMillion * multiplier,
             CachedInputPerMillion = rates.CachedInputPerMillion * multiplier,
             CacheWriteInputPerMillion = rates.CacheWriteInputPerMillion * multiplier,
+            CacheWrite12HourInputPerMillion = rates.CacheWrite12HourInputPerMillion * multiplier,
             OutputPerMillion = rates.OutputPerMillion * multiplier
         };
     }
@@ -220,7 +223,9 @@ public static class AiModelCostCatalog
 
     private static TokenCostRates OpenAi(string model, decimal input, decimal? cachedInput, decimal output)
         => Create("openai", model, input, cachedInput, cacheWrite: null, output, webSearch: 10m, imageSearch: 10m)
-            with { LongContextStartsAtTokens = model.StartsWith("gpt-6", StringComparison.Ordinal) ? 272001 : null,
+            with { LongContextStartsAtTokens = model.StartsWith("gpt-6", StringComparison.Ordinal) || model is "gpt-5.4" or "gpt-5.6-luna" ? 272001 : null,
+                CacheWriteInputPerMillion = model.StartsWith("gpt-6", StringComparison.Ordinal) || model == "gpt-5.6-luna" ? input * 1.25m : null,
+                CacheWrite12HourInputPerMillion = model.StartsWith("gpt-6", StringComparison.Ordinal) || model == "gpt-5.6-luna" ? input * 2.5m : null,
                 LongContextInputMultiplier = 2m, LongContextOutputMultiplier = 1.5m };
 
     private static TokenCostRates Anthropic(string model, decimal input, decimal cacheWrite, decimal cacheRead, decimal output)

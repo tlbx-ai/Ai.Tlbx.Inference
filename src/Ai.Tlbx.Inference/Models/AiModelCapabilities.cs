@@ -2,6 +2,7 @@ namespace Ai.Tlbx.Inference;
 
 public sealed record AiModelCapabilities
 {
+    public bool SupportsNativeCompaction { get; init; }
     public required bool SupportsThinking { get; init; }
     public required bool SupportsTools { get; init; }
     public required bool SupportsStructuredOutput { get; init; }

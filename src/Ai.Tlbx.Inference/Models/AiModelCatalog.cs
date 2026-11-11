@@ -220,6 +220,8 @@ public static class AiModelCatalog
             Notes = notes,
             Capabilities = new AiModelCapabilities
             {
+                SupportsNativeCompaction = provider == ProviderType.OpenAi && supportsResponsesApi
+                    && (apiName.StartsWith("gpt-6", StringComparison.Ordinal) || apiName.StartsWith("gpt-5.2", StringComparison.Ordinal) || apiName.StartsWith("gpt-5.3", StringComparison.Ordinal) || apiName is "gpt-5.4" or "gpt-5.6-luna"),
                 SupportsThinking = supportsThinking,
                 SupportsTools = true,
                 SupportsStructuredOutput = true,

@@ -6,6 +6,15 @@
     "command": "dotnet test tests\\Ai.Tlbx.Inference.IntegrationTests\\Ai.Tlbx.Inference.IntegrationTests.csproj",
     "maintenance_filter": "FullyQualifiedName~CatalogMaintenanceTests",
     "maintenance_budget_usd": 4,
-    "catalog_review_date": "2026-10-27"
+    "catalog_review_date": "2026-10-27",
+    "native_compaction": {
+      "filter": "FullyQualifiedName~NativeCompactionAcceptanceTests",
+      "opt_in_environment": "AI_TLBX_RUN_NATIVE_COMPACTION_ACCEPTANCE",
+      "required_key_environment": "OPENAI_API_KEY",
+      "artifact_directory_environment": "AI_TLBX_ACCEPTANCE_LOG_DIRECTORY",
+      "budget_usd": 0.50,
+      "model": "gpt-6.1-terra",
+      "coverage": "Six append-only tool turns, native complete-window replay, immutable context recall, real prefix-cache hits before and after compaction. Run one framework only; opt-in absent means skipped."
+    }
   }
 ]

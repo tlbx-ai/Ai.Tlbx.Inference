@@ -58,5 +58,7 @@ public static class AiModelExtensions
 
     public static bool SupportsThinking(this AiModel model) => AiModelCatalog.Get(model).Capabilities.SupportsThinking;
 
+    public static bool SupportsNativeCompaction(this AiModel model) => AiModelCatalog.Get(model).Capabilities.SupportsNativeCompaction;
+
     public static int GetContextWindow(this AiModel model) => AiModelCatalog.Get(model).ContextWindow;
 }

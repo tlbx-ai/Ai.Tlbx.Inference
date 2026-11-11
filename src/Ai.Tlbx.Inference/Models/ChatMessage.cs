@@ -5,7 +5,9 @@ public enum ChatRole
     System,
     User,
     Assistant,
-    Tool
+    Tool,
+    /// <summary>Opaque native provider input item (for example an entire compacted window item).</summary>
+    Provider
 }
 
 public sealed record ChatMessage

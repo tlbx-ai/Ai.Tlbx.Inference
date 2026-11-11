@@ -9,6 +9,8 @@ public readonly record struct TokenUsage
     public int OutputTokens { get; init; }
     public int CacheReadTokens { get; init; }
     public int CacheWriteTokens { get; init; }
+    public int CacheWrite30MinuteTokens { get; init; }
+    public int CacheWrite12HourTokens { get; init; }
     /// <summary>
     /// Diagnostic subset of <see cref="OutputTokens"/> spent on reasoning.
     /// </summary>
@@ -23,6 +25,8 @@ public readonly record struct TokenUsage
         OutputTokens = a.OutputTokens + b.OutputTokens,
         CacheReadTokens = a.CacheReadTokens + b.CacheReadTokens,
         CacheWriteTokens = a.CacheWriteTokens + b.CacheWriteTokens,
+        CacheWrite30MinuteTokens = a.CacheWrite30MinuteTokens + b.CacheWrite30MinuteTokens,
+        CacheWrite12HourTokens = a.CacheWrite12HourTokens + b.CacheWrite12HourTokens,
         ThinkingTokens = a.ThinkingTokens + b.ThinkingTokens,
         ServiceTier = a.TotalTokens == 0 ? b.ServiceTier : b.TotalTokens == 0 ? a.ServiceTier
             : a.ServiceTier == b.ServiceTier ? a.ServiceTier : null,

@@ -22,6 +22,9 @@ public sealed record ToolIterationRequest
     public required int Iteration { get; init; }
     /// <summary>The current conversation, including earlier tool results; the observer is cleared.</summary>
     public required CompletionRequest Request { get; init; }
+    public IReadOnlyList<ChatMessage>? CanonicalMessages { get; init; }
+    /// <summary>Exact provider input count when native context policy is enabled, including tools and images.</summary>
+    public int? InputTokens { get; init; }
     public required IReadOnlyList<ToolDefinition> Tools { get; init; }
 }
 

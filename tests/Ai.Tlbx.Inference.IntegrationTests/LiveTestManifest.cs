@@ -2,6 +2,10 @@ namespace Ai.Tlbx.Inference.IntegrationTests;
 
 internal static class LiveTestManifest
 {
+    // Separate opt-in: never included merely because a provider API key is configured.
+    public const string NativeCompactionAcceptanceOptIn = "AI_TLBX_RUN_NATIVE_COMPACTION_ACCEPTANCE";
+    public const decimal NativeCompactionAcceptanceBudgetUsd = .50m;
+
     public static IReadOnlyList<LiveTestManifestEntry> Entries { get; } =
         AiModelCatalog.All
             .Select(model => new LiveTestManifestEntry

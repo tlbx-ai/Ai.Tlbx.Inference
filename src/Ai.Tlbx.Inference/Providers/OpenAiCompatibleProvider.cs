@@ -10,7 +10,7 @@ using Ai.Tlbx.Inference.Json;
 
 namespace Ai.Tlbx.Inference.Providers;
 
-internal abstract class OpenAiCompatibleProvider : IProvider
+internal abstract partial class OpenAiCompatibleProvider : IProvider, INativeContextProvider
 {
     protected readonly ProviderRequestContext _context;
 
@@ -661,7 +661,7 @@ internal abstract class OpenAiCompatibleProvider : IProvider
         return body;
     }
 
-    private JsonObject BuildResponsesRequestBody(ProviderRequest request, bool stream, IReadOnlyList<string> uploadedAttachmentIds)
+    private JsonObject BuildResponsesRequestBody(ProviderRequest request, bool stream, IReadOnlyList<string>? uploadedAttachmentIds)
     {
         var input = new JsonArray();
         var attachmentIndex = 0;
@@ -673,6 +673,11 @@ internal abstract class OpenAiCompatibleProvider : IProvider
         {
             switch (msg.Role)
             {
+                case ChatRole.Provider:
+                    if (string.IsNullOrWhiteSpace(msg.ProviderContentJson))
+                        throw new ArgumentException("Native provider input is missing its opaque item.");
+                    input.Add(JsonNode.Parse(msg.ProviderContentJson));
+                    break;
                 case ChatRole.System:
                     input.Add((JsonNode)new JsonObject { ["role"] = "developer", ["content"] = msg.Content ?? "" });
                     break;
@@ -686,6 +691,15 @@ internal abstract class OpenAiCompatibleProvider : IProvider
 
                     foreach (var attachment in msg.Attachments)
                     {
+                        if (uploadedAttachmentIds is null)
+                        {
+                            parts.Add((JsonNode)new JsonObject
+                            {
+                                ["type"] = "input_file", ["filename"] = attachment.FileName,
+                                ["file_data"] = $"data:{attachment.MimeType};base64,{Convert.ToBase64String(attachment.Content.Span)}"
+                            });
+                            continue;
+                        }
                         if (attachmentIndex >= uploadedAttachmentIds.Count)
                         {
                             throw new InvalidOperationException("Attachment upload state did not match request attachments.");
@@ -823,6 +837,7 @@ internal abstract class OpenAiCompatibleProvider : IProvider
         if (tools.Count > 0)
             body["tools"] = tools;
 
+        if (!string.IsNullOrWhiteSpace(request.PromptCacheKey)) body["prompt_cache_key"] = request.PromptCacheKey;
         var include = new JsonArray("reasoning.encrypted_content");
         if (enableWebSearch && !IsXai)
         {
@@ -958,8 +973,23 @@ internal abstract class OpenAiCompatibleProvider : IProvider
             InputTokens = inputTokens,
             OutputTokens = outputTokens,
             CacheReadTokens = cacheReadTokens,
+            CacheWriteTokens = ReadCacheWriteTokens(usage, null),
+            CacheWrite30MinuteTokens = ReadCacheWriteTokens(usage, "ttl_30m_tokens"),
+            CacheWrite12HourTokens = ReadCacheWriteTokens(usage, "ttl_12h_tokens"),
             ThinkingTokens = thinkingTokens,
         };
+    }
+
+    private static int ReadCacheWriteTokens(JsonElement usage, string? bucket)
+    {
+        if (!usage.TryGetProperty("input_tokens_details", out var details)) return 0;
+        if (bucket is null && details.TryGetProperty("cache_write_tokens", out var total) && total.TryGetInt32(out var count)) return count;
+        if (details.TryGetProperty("cache_write_tokens_details", out var writes))
+        {
+            if (bucket is not null && writes.TryGetProperty(bucket, out var value) && value.TryGetInt32(out var tokens)) return tokens;
+            if (bucket is null) return writes.EnumerateObject().Sum(item => item.Value.TryGetInt32(out var tokens) ? tokens : 0);
+        }
+        return 0;
     }
 
     private static string? ReadServiceTier(JsonElement response)

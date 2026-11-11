@@ -39,7 +39,8 @@ public sealed partial class AiInferenceClient : IAiInferenceClient
         ValidateGroundingRequest(request);
         var descriptor = AiModelCatalog.Get(request.Model);
         var provider = GetProvider(descriptor.Provider);
-        var providerRequest = BuildProviderRequest(request);
+        var prepared = await PrepareContextAsync(request, request.Messages, BuildProviderRequest(request), request.CompactionState, ct).ConfigureAwait(false);
+        var providerRequest = prepared.Request;
         var response = await provider.CompleteAsync(providerRequest, ct).ConfigureAwait(false);
 
         return new CompletionResponse<string>
@@ -51,6 +52,8 @@ public sealed partial class AiInferenceClient : IAiInferenceClient
             StopReason = response.StopReason,
             Diagnostics = BuildDiagnostics(descriptor, response),
             Grounding = response.Grounding,
+            CompactionState = prepared.State,
+            Compactions = prepared.Compaction is { } compacted ? [compacted] : [],
         };
     }
 
@@ -61,7 +64,8 @@ public sealed partial class AiInferenceClient : IAiInferenceClient
             ?? throw new InvalidOperationException("CompletionRequest.JsonSchema must be provided for AOT-compatible structured output.");
         var descriptor = AiModelCatalog.Get(request.Model);
         var provider = GetProvider(descriptor.Provider);
-        var providerRequest = BuildProviderRequest(request, schema);
+        var prepared = await PrepareContextAsync(request, request.Messages, BuildProviderRequest(request, schema), request.CompactionState, ct).ConfigureAwait(false);
+        var providerRequest = prepared.Request;
         var response = await provider.CompleteAsync(providerRequest, ct).ConfigureAwait(false);
 
         var content = JsonSerializer.Deserialize(response.Content, jsonTypeInfo)!;
@@ -75,6 +79,8 @@ public sealed partial class AiInferenceClient : IAiInferenceClient
             StopReason = response.StopReason,
             Diagnostics = BuildDiagnostics(descriptor, response),
             Grounding = response.Grounding,
+            CompactionState = prepared.State,
+            Compactions = prepared.Compaction is { } compacted ? [compacted] : [],
         };
     }
 
@@ -84,7 +90,8 @@ public sealed partial class AiInferenceClient : IAiInferenceClient
     {
         ValidateGroundingRequest(request);
         var provider = GetProvider(request.Model.GetProvider());
-        var providerRequest = BuildProviderRequest(request);
+        var prepared = await PrepareContextAsync(request, request.Messages, BuildProviderRequest(request), request.CompactionState, ct).ConfigureAwait(false);
+        var providerRequest = prepared.Request;
 
         await foreach (var e in provider.StreamAsync(providerRequest, ct).ConfigureAwait(false))
         {
@@ -175,20 +182,34 @@ public sealed partial class AiInferenceClient : IAiInferenceClient
         CompletionDiagnostics? finalDiagnostics = null;
         GroundingResult? grounding = null;
         var baseReq = BuildProviderRequest(request, tools: tools);
+        var compactionState = request.CompactionState;
+        var compactions = new List<ConversationCompaction>();
 
         while (iterations < maxIterations)
         {
             iterations++;
-            var providerReq = baseReq with { Messages = messages };
-            var response = await CompleteToolIterationAsync(provider, providerReq, request, iterations, ct).ConfigureAwait(false);
+            var prepared = await PrepareContextAsync(request, messages, baseReq, compactionState, ct).ConfigureAwait(false);
+            compactionState = prepared.State;
+            if (prepared.Compaction is { } compacted) compactions.Add(compacted);
+            var providerReq = prepared.Request;
+            var response = await CompleteToolIterationAsync(provider, providerReq, request, iterations, messages, prepared.InputTokens, ct).ConfigureAwait(false);
             totalUsage += response.Usage;
             grounding = GroundingResult.Combine(grounding, response.Grounding);
+            if (request.ConversationObserver is { } journal)
+                await journal.OnMessageAsync(new ChatMessage
+                {
+                    Role = ChatRole.Assistant, Content = response.Content, ToolCalls = response.ToolCalls,
+                    ProviderContentJson = response.ProviderContentJson
+                }, CancellationToken.None).ConfigureAwait(false);
 
             if (response.ToolCalls is null or { Count: 0 })
             {
                 return new ToolExecutionResponse<string>
                 {
                     Content = response.Content,
+                    ProviderContentJson = response.ProviderContentJson,
+                    CompactionState = compactionState,
+                    Compactions = compactions.ToArray(),
                     Usage = totalUsage,
                     Iterations = iterations,
                     Messages = messages,
@@ -209,13 +230,15 @@ public sealed partial class AiInferenceClient : IAiInferenceClient
 
             foreach (var toolCall in response.ToolCalls)
             {
+                ct.ThrowIfCancellationRequested();
                 var result = await toolExecutor(toolCall).ConfigureAwait(false);
-                messages.Add(new ChatMessage
+                var resultMessage = new ChatMessage
                 {
-                    Role = ChatRole.Tool,
-                    ToolCallId = result.ToolCallId,
-                    Content = result.Result,
-                });
+                    Role = ChatRole.Tool, ToolCallId = result.ToolCallId, Content = result.Result
+                };
+                messages.Add(resultMessage);
+                if (request.ConversationObserver is { } toolJournal)
+                    await toolJournal.OnMessageAsync(resultMessage, CancellationToken.None).ConfigureAwait(false);
             }
         }
 
@@ -239,14 +262,25 @@ public sealed partial class AiInferenceClient : IAiInferenceClient
         CompletionDiagnostics? finalDiagnostics = null;
         GroundingResult? grounding = null;
         var baseReq = BuildProviderRequest(request, tools: tools);
+        var compactionState = request.CompactionState;
+        var compactions = new List<ConversationCompaction>();
 
         while (iterations < maxIterations)
         {
             iterations++;
-            var providerReq = baseReq with { Messages = messages };
-            var response = await CompleteToolIterationAsync(provider, providerReq, request, iterations, ct).ConfigureAwait(false);
+            var prepared = await PrepareContextAsync(request, messages, baseReq, compactionState, ct).ConfigureAwait(false);
+            compactionState = prepared.State;
+            if (prepared.Compaction is { } compacted) compactions.Add(compacted);
+            var providerReq = prepared.Request;
+            var response = await CompleteToolIterationAsync(provider, providerReq, request, iterations, messages, prepared.InputTokens, ct).ConfigureAwait(false);
             totalUsage += response.Usage;
             grounding = GroundingResult.Combine(grounding, response.Grounding);
+            if (request.ConversationObserver is { } journal)
+                await journal.OnMessageAsync(new ChatMessage
+                {
+                    Role = ChatRole.Assistant, Content = response.Content, ToolCalls = response.ToolCalls,
+                    ProviderContentJson = response.ProviderContentJson
+                }, CancellationToken.None).ConfigureAwait(false);
 
             if (response.ToolCalls is null or { Count: 0 })
             {
@@ -255,6 +289,9 @@ public sealed partial class AiInferenceClient : IAiInferenceClient
                 return new ToolExecutionResponse<T>
                 {
                     Content = content,
+                    ProviderContentJson = response.ProviderContentJson,
+                    CompactionState = compactionState,
+                    Compactions = compactions.ToArray(),
                     Usage = totalUsage,
                     Iterations = iterations,
                     Messages = messages,
@@ -275,13 +312,15 @@ public sealed partial class AiInferenceClient : IAiInferenceClient
 
             foreach (var toolCall in response.ToolCalls)
             {
+                ct.ThrowIfCancellationRequested();
                 var result = await toolExecutor(toolCall).ConfigureAwait(false);
-                messages.Add(new ChatMessage
+                var resultMessage = new ChatMessage
                 {
-                    Role = ChatRole.Tool,
-                    ToolCallId = result.ToolCallId,
-                    Content = result.Result,
-                });
+                    Role = ChatRole.Tool, ToolCallId = result.ToolCallId, Content = result.Result
+                };
+                messages.Add(resultMessage);
+                if (request.ConversationObserver is { } toolJournal)
+                    await toolJournal.OnMessageAsync(resultMessage, CancellationToken.None).ConfigureAwait(false);
             }
         }
 
@@ -301,19 +340,25 @@ public sealed partial class AiInferenceClient : IAiInferenceClient
         var totalUsage = new TokenUsage();
         var iterations = 0;
         var baseReq = BuildProviderRequest(request, tools: tools);
+        var compactionState = request.CompactionState;
+        var compactions = new List<ConversationCompaction>();
         GroundingResult? grounding = null;
 
         while (iterations < maxIterations)
         {
             iterations++;
-            var providerReq = baseReq with { Messages = messages };
+            var prepared = await PrepareContextAsync(request, messages, baseReq, compactionState, ct).ConfigureAwait(false);
+            compactionState = prepared.State;
+            if (prepared.Compaction is { } compacted) compactions.Add(compacted);
+            var providerReq = prepared.Request;
+            if (prepared.Compaction is { } eventCompaction) yield return new ConversationCompactedEvent(eventCompaction);
 
             var pendingToolCalls = new List<ToolCallRequest>();
             var contentBuilder = new System.Text.StringBuilder();
             TokenUsage? streamUsage = null;
             string? providerContentJson = null;
 
-            await foreach (var e in StreamToolIterationAsync(provider, providerReq, request, iterations, ct).ConfigureAwait(false))
+            await foreach (var e in StreamToolIterationAsync(provider, providerReq, request, iterations, messages, prepared.InputTokens, ct).ConfigureAwait(false))
             {
                 providerContentJson = e.ProviderContentJson ?? providerContentJson;
                 if (e.TextDelta is not null)
@@ -344,29 +389,37 @@ public sealed partial class AiInferenceClient : IAiInferenceClient
                 totalUsage += streamUsage.Value;
             }
 
-            if (pendingToolCalls.Count == 0)
-            {
-                yield return new CompletedEvent(totalUsage, grounding);
-                yield break;
-            }
-
-            messages.Add(new ChatMessage
+            var assistantMessage = new ChatMessage
             {
                 Role = ChatRole.Assistant,
                 Content = contentBuilder.ToString(),
-                ToolCalls = pendingToolCalls,
-                ProviderContentJson = providerContentJson,
-            });
+                ToolCalls = pendingToolCalls.Count == 0 ? null : pendingToolCalls.ToArray(),
+                ProviderContentJson = providerContentJson
+            };
+            if (request.ConversationObserver is { } assistantJournal)
+                await assistantJournal.OnMessageAsync(assistantMessage, CancellationToken.None).ConfigureAwait(false);
+            yield return new ConversationMessageAddedEvent(assistantMessage);
+            if (pendingToolCalls.Count == 0)
+            {
+                yield return new CompletedEvent(totalUsage, grounding, compactionState);
+                yield break;
+            }
+            messages.Add(assistantMessage);
 
             foreach (var toolCall in pendingToolCalls)
             {
+                ct.ThrowIfCancellationRequested();
                 var result = await toolExecutor(toolCall).ConfigureAwait(false);
-                messages.Add(new ChatMessage
+                var resultMessage = new ChatMessage
                 {
                     Role = ChatRole.Tool,
                     ToolCallId = result.ToolCallId,
                     Content = result.Result,
-                });
+                };
+                messages.Add(resultMessage);
+                if (request.ConversationObserver is { } resultJournal)
+                    await resultJournal.OnMessageAsync(resultMessage, CancellationToken.None).ConfigureAwait(false);
+                yield return new ConversationMessageAddedEvent(resultMessage);
 
                 yield return new ToolResultAddedEvent(result.ToolCallId, result.Result);
             }
@@ -376,15 +429,17 @@ public sealed partial class AiInferenceClient : IAiInferenceClient
     }
 
     private static ToolIterationRequest CreateIterationRequest(
-        CompletionRequest request, ProviderRequest providerRequest, int iteration) => new()
+        CompletionRequest request, ProviderRequest providerRequest, int iteration, IReadOnlyList<ChatMessage> canonicalMessages, int? inputTokens) => new()
     {
         Iteration = iteration,
-        Request = request with { Messages = providerRequest.Messages.ToArray(), ToolIterationObserver = null },
+        Request = request with { Messages = providerRequest.Messages.ToArray(), SystemMessage = providerRequest.SystemMessage, ToolIterationObserver = null },
+        CanonicalMessages = canonicalMessages.ToArray(),
+        InputTokens = inputTokens,
         Tools = providerRequest.Tools?.ToArray() ?? [],
     };
 
     private static async Task<ProviderResponse> CompleteToolIterationAsync(
-        IProvider provider, ProviderRequest providerRequest, CompletionRequest request, int iteration, CancellationToken ct)
+        IProvider provider, ProviderRequest providerRequest, CompletionRequest request, int iteration, IReadOnlyList<ChatMessage> canonicalMessages, int? inputTokens, CancellationToken ct)
     {
         var observer = request.ToolIterationObserver;
         if (observer is null)
@@ -392,7 +447,7 @@ public sealed partial class AiInferenceClient : IAiInferenceClient
             return await provider.CompleteAsync(providerRequest, ct).ConfigureAwait(false);
         }
 
-        await observer.OnStartingAsync(CreateIterationRequest(request, providerRequest, iteration), ct).ConfigureAwait(false);
+        await observer.OnStartingAsync(CreateIterationRequest(request, providerRequest, iteration, canonicalMessages, inputTokens), ct).ConfigureAwait(false);
         ProviderResponse? response = null;
         try
         {
@@ -412,13 +467,13 @@ public sealed partial class AiInferenceClient : IAiInferenceClient
     }
 
     private static async IAsyncEnumerable<ProviderStreamEvent> StreamToolIterationAsync(
-        IProvider provider, ProviderRequest providerRequest, CompletionRequest request, int iteration,
+        IProvider provider, ProviderRequest providerRequest, CompletionRequest request, int iteration, IReadOnlyList<ChatMessage> canonicalMessages, int? inputTokens,
         [EnumeratorCancellation] CancellationToken ct)
     {
         var observer = request.ToolIterationObserver;
         if (observer is not null)
         {
-            await observer.OnStartingAsync(CreateIterationRequest(request, providerRequest, iteration), ct).ConfigureAwait(false);
+            await observer.OnStartingAsync(CreateIterationRequest(request, providerRequest, iteration, canonicalMessages, inputTokens), ct).ConfigureAwait(false);
         }
 
         TokenUsage? usage = null;
@@ -567,6 +622,8 @@ public sealed partial class AiInferenceClient : IAiInferenceClient
             throw new ArgumentException($"{request.Model.ToDisplayName()} requires reasoning.", nameof(request));
         }
         var provider = request.Model.GetProvider();
+        if (provider != ProviderType.OpenAi && request.Messages.Any(message => message.Role == ChatRole.Provider))
+            throw new NotSupportedException("Native OpenAI input items cannot be sent to another provider.");
         if (request.ServiceTier is not null && provider != ProviderType.OpenAi)
         {
             throw new ArgumentException("Service tier is an OpenAI setting.", nameof(request));
@@ -598,9 +655,11 @@ public sealed partial class AiInferenceClient : IAiInferenceClient
         return new ProviderRequest
         {
             ModelApiName = request.Model.ToApiName(),
-            PreferredEndpoint = AiModelCatalog.Get(request.Model).PreferredEndpoint,
+            PreferredEndpoint = request.Compaction is not null || request.CompactionState is not null || request.Messages.Any(message => message.Role == ChatRole.Provider)
+                ? ModelEndpointFamily.Responses : AiModelCatalog.Get(request.Model).PreferredEndpoint,
             Messages = CloneMessages(request.Messages),
             SystemMessage = request.SystemMessage,
+            PromptCacheKey = request.PromptCacheKey,
             Temperature = request.Temperature,
             MaxTokens = request.MaxTokens,
             ThinkingBudget = request.ThinkingBudget,

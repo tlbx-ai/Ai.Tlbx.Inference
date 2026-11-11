@@ -5,6 +5,11 @@ public sealed record CompletionRequest
     public required AiModel Model { get; init; }
     public required IReadOnlyList<ChatMessage> Messages { get; init; }
     public string? SystemMessage { get; init; }
+    public CompactionPolicy? Compaction { get; init; }
+    public CompactionState? CompactionState { get; init; }
+    public ICompactionObserver? CompactionObserver { get; init; }
+    public IConversationObserver? ConversationObserver { get; init; }
+    public string? PromptCacheKey { get; init; }
     public double? Temperature { get; init; }
     public int? MaxTokens { get; init; }
     public int? ThinkingBudget { get; init; }

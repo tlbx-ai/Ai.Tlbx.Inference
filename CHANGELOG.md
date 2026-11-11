@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.10.0 - 2026-11-12
+
+- Add native GPT Responses compaction, exact input-token counting and pricing-aware automatic context admission before every tool iteration.
+- Preserve the complete native checkpoint separately from the append-only conversation. Journal complete assistant/tool messages before execution, including encrypted reasoning and provider item IDs.
+- Report compaction usage independently, carry exact counted input into iteration observers, and price 30-minute/12-hour cache writes and long-context token multipliers.
+- Cover native schemas, token boundaries, replay, streaming order and failure accounting with deterministic tests and Native AOT smoke checks. Paid Terra acceptance passed six tool turns across compaction, preserving all constraints and observing real cache hits before/after (USD 0.01979310).
+
 ## 2.9.0 - 2026-11-11
 
 - Add beta OpenAI hosted-agent sessions through the inference facade: create/retrieve, streamed turns, saved items and usage, cancellation/deletion, web search and service-side MCP.

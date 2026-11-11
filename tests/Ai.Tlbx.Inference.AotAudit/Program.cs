@@ -106,6 +106,24 @@ await hosted.CancelHostedAgentTurnAsync(session.Id);
 await hosted.DeleteHostedAgentSessionAsync(session.Id);
 Console.WriteLine("AOT audit app compiled; hosted-agent mock lifecycle passed.");
 
+using var nativeHttp = new HttpClient(new NativeContextAuditHandler());
+var native = new AiInferenceClient(nativeHttp, options);
+var nativeRequest = new CompletionRequest
+{
+    Model = AiModel.Gpt61Terra,
+    SystemMessage = "rules",
+    Messages = [new ChatMessage { Role = ChatRole.User, Content = "Keep the worksheet intact." }],
+    ConversationObserver = new NativeJournalAuditObserver(),
+    ToolIterationObserver = new NativeCountAuditObserver(),
+};
+if (await native.CountInputTokensAsync(nativeRequest, tools) != 500) throw new InvalidOperationException("Native count failed.");
+var nativeCompact = await native.CompactAsync(new CompactionRequest { Model = nativeRequest.Model, SystemMessage = nativeRequest.SystemMessage, Messages = nativeRequest.Messages });
+if (nativeCompact.Messages.Count != 3 || nativeCompact.Messages.Any(item => item.Role != ChatRole.Provider)) throw new InvalidOperationException("Native compact window was lost.");
+var nativeResult = await native.CompleteWithToolsAsync(nativeRequest with { Compaction = new CompactionPolicy { ThresholdTokens = 200 } }, tools, toolExecutor);
+if (nativeResult.Content != "native AOT passed" || nativeResult.CompactionState?.Messages.Count != 3 || nativeResult.Messages.Count != 1)
+    throw new InvalidOperationException("Native checkpoint or append-only journal failed.");
+Console.WriteLine("Native compaction/counting, complete-window replay and observer mocks passed.");
+
 public sealed record WeatherInfo
 {
     public required string City { get; init; }
@@ -133,5 +151,46 @@ internal sealed class HostedAuditHandler : HttpMessageHandler
                 ? "{\"data\":[],\"has_more\":false}"
                 : "{\"id\":\"sess_mock\",\"status\":\"idle\"}";
         return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK) { Content = new StringContent(text) });
+    }
+}
+
+internal sealed class NativeJournalAuditObserver : IConversationObserver
+{
+    public ValueTask OnMessageAsync(ChatMessage message, CancellationToken cancellationToken)
+    {
+        if (message.Role != ChatRole.Assistant || message.Content != "native AOT passed") throw new InvalidOperationException("Native journal callback failed.");
+        return ValueTask.CompletedTask;
+    }
+}
+
+internal sealed class NativeCountAuditObserver : IToolIterationObserver
+{
+    public ValueTask OnStartingAsync(ToolIterationRequest request, CancellationToken cancellationToken)
+    {
+        if (request.InputTokens != 100) throw new InvalidOperationException("Compacted exact token count was lost.");
+        return ValueTask.CompletedTask;
+    }
+    public ValueTask OnFinishedAsync(ToolIterationResult result) => ValueTask.CompletedTask;
+}
+
+internal sealed class NativeContextAuditHandler : HttpMessageHandler
+{
+    private const string Window = """[{"role":"developer","content":"rules"},{"role":"user","content":[{"type":"input_file","filename":"worksheet.pdf","file_data":"data:application/pdf;base64,JVBERg=="}]},{"type":"compaction","id":"cmp_aot","encrypted_content":"opaque-AOT"}]""";
+    protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+    {
+        using var document = JsonDocument.Parse(await request.Content!.ReadAsStringAsync(cancellationToken));
+        var input = document.RootElement.GetProperty("input");
+        var compacted = input.EnumerateArray().Any(item => item.TryGetProperty("type", out var type) && type.GetString() == "compaction");
+        var path = request.RequestUri!.AbsolutePath;
+        string response;
+        if (path.EndsWith("/input_tokens", StringComparison.Ordinal)) response = compacted ? "{\"input_tokens\":100}" : "{\"input_tokens\":500}";
+        else if (path.EndsWith("/compact", StringComparison.Ordinal)) response = "{\"id\":\"compact_aot\",\"output\":" + Window + ",\"usage\":{\"input_tokens\":500,\"output_tokens\":100}}";
+        else
+        {
+            if (!compacted || input.GetArrayLength() != 3 || input[1].GetProperty("content")[0].GetProperty("file_data").GetString() != "data:application/pdf;base64,JVBERg==")
+                throw new InvalidOperationException("Native AOT request mutated the complete window.");
+            response = """{"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"native AOT passed"}]}],"usage":{"input_tokens":100,"output_tokens":4}}""";
+        }
+        return new HttpResponseMessage(System.Net.HttpStatusCode.OK) { Content = new StringContent(response) };
     }
 }

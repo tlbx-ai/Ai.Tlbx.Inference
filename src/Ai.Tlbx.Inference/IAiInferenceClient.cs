@@ -4,6 +4,9 @@ namespace Ai.Tlbx.Inference;
 
 public interface IAiInferenceClient
 {
+    Task<CompactionResponse> CompactAsync(CompactionRequest request, CancellationToken ct = default);
+    Task<int> CountInputTokensAsync(CompletionRequest request, IReadOnlyList<ToolDefinition>? tools = null, CancellationToken ct = default);
+
     Task<AudioTranscriptionResponse> TranscribeAudioAsync(AudioTranscriptionRequest request, CancellationToken ct = default);
 
     Task<byte[]> GenerateSpeechAsync(SpeechGenerationRequest request, CancellationToken ct = default);

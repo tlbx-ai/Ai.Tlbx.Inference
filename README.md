@@ -25,6 +25,16 @@ Dual-targeted .NET 10 / .NET 11 AI inference client for OpenAI, Anthropic, Googl
 
 The included [Inference Playground](playground/README.md) exercises normal chat and hosted agents through the library.
 
+## Native GPT context compaction
+
+Set `CompletionRequest.Compaction = new CompactionPolicy()` to count the active Responses input before every model/tool iteration and compact automatically. The default trigger is the lower of the context budget and the model's pricing boundary, minus 32,768 tokens. For Terra this is 239,232 tokens; automatic compaction also reserves up to 4,096 tokens for compaction-operation overhead. An already oversized input fails closed before a paid model/compaction call. Long-context price boundaries and cache-write lifetimes are maintained in `AiModelCostCatalog`.
+
+`CountInputTokensAsync(request, tools)` counts the actual input including tools and inline document/image data. `CompactAsync` exposes the native `/responses/compact` operation directly. Retain **every** returned `CompactionResponse.Messages` item in order, including retained user messages and opaque compaction data. Supply the returned `CompactionState` on the next request together with the complete append-only transcript; the SDK appends only messages after `SourceMessageCount` and avoids duplicating the original developer prefix. Native checkpoints use `ChatRole.Provider` with unchanged `ProviderContentJson`; they do not replace the caller's journal.
+
+Use `IConversationObserver` for durable complete assistant/tool messages. Assistant callbacks run before tools execute, preserving text, real tool call/item IDs and encrypted reasoning even when a tool subsequently fails. Streaming also emits `ConversationMessageAddedEvent` and `ConversationCompactedEvent`. `ICompactionObserver` reports native compaction usage even if subsequent counting or generation fails. Model usage excludes separately reported compaction usage, so account for both. `ToolIterationRequest.InputTokens` contains the exact active count when automatic compaction is enabled.
+
+Prompt caching remains prefix-dependent; the first request after compaction can miss. Preserve stable tools/instructions and the native checkpoint unchanged. Usage distinguishes cache reads, 30-minute writes and 12-hour writes. The opt-in paid `NativeCompactionAcceptanceTests` exercises six tool turns across native compaction and requires real cache hits on both sides; see the live-test manifest for its separate USD 0.50 budget.
+
 ## Accounting inside tool dialogs
 
 Set `CompletionRequest.ToolIterationObserver` to an `IToolIterationObserver` when a tool dialog needs per-call budget reservations and durable usage accounting. `OnStartingAsync` receives the current conversation (including earlier tool results) and tool definitions before each provider call; throwing prevents that call. `OnFinishedAsync` runs before tool execution and reports only that call's usage, so a later provider/tool failure cannot hide an earlier call's reported consumption. Both typed and untyped `CompleteWithToolsAsync`, plus `StreamWithToolsAsync`, support this boundary.

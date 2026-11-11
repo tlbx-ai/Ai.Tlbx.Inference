@@ -16,6 +16,7 @@ internal sealed record ProviderRequest
     public ModelEndpointFamily PreferredEndpoint { get; init; } = ModelEndpointFamily.ChatCompletions;
     public required IReadOnlyList<ChatMessage> Messages { get; init; }
     public string? SystemMessage { get; init; }
+    public string? PromptCacheKey { get; init; }
     public double? Temperature { get; init; }
     public int? MaxTokens { get; init; }
     public int? ThinkingBudget { get; init; }
@@ -93,4 +94,10 @@ internal sealed record ProviderImageEditRequest
     public required IReadOnlyList<ImageEditInput> Images { get; init; }
     public string? Size { get; init; }
     public string? Quality { get; init; }
+}
+
+internal interface INativeContextProvider
+{
+    Task<int> CountInputTokensAsync(ProviderRequest request, CancellationToken ct);
+    Task<CompactionResponse> CompactAsync(ProviderRequest request, CancellationToken ct);
 }
