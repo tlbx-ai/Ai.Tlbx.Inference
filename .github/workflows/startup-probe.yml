@@ -5,6 +5,7 @@ on:
 
 permissions:
   contents: read
+  id-token: write
 
 jobs:
   runner:
@@ -16,4 +17,4 @@ jobs:
     timeout-minutes: 3
     steps:
       - name: Confirm runner startup
-        run: echo "Runner started without environment or external actions"
+        run: echo "Runner started with OIDC permission and no environment"
