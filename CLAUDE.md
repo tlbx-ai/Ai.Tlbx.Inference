@@ -80,7 +80,7 @@ When making changes in this repo:
 3. Commit and push the existing default branch `master`; never create a release branch.
 4. Publish using `./scripts/publish-nuget.ps1 -Version X.Y.Z`. This dispatches `.github/workflows/publish-nuget.yml` from `master`. The workflow verifies, packs only the library, and uses `NuGet/login` OIDC through the master-only `nuget` environment. Do not use a stored API key.
 5. Wait for the exact run to finish. Retry the same version after a failed upload. NuGet policy must bind `tlbx-ai/Ai.Tlbx.Inference`, `publish-nuget.yml`, environment `nuget`, and package `Ai.Tlbx.Inference`.
-For repeated startup_failure with zero jobs, inspect the run annotations, compare the working release configuration, then isolate runner and environment startup with a minimal no-upload workflow before escalating to external support. A generic internal-error annotation alone does not establish the cause.
+For repeated startup_failure with zero jobs, inspect the run annotations, compare the working release configuration, then isolate runner and environment startup with a minimal no-upload workflow before escalating to external support. A generic internal-error annotation alone does not establish the cause. If the minimal probes pass, verify that no workflow runs are active before disabling and immediately re-enabling only the affected workflow once; preserve its path, environment, permissions and NuGet policy. Remove temporary diagnostic workflows after collecting their results.
 
 6. Create/push `vX.Y.Z` and the GitHub release with package and symbols. Verify exact public NuGet downloads and fresh-cache package-only consumers for net10/net11. The web playground is a separate `IsPackable=false` application and must never enter the package.
 
