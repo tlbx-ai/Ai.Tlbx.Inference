@@ -15,6 +15,7 @@ public sealed partial class AiInferenceClient : IAiInferenceClient
     private readonly Dictionary<ProviderType, IProvider> _providers = new();
     private readonly ResiliencePipeline<HttpResponseMessage> _resiliencePipeline;
     private readonly Action<InferenceLogLevel, string>? _log;
+    private readonly HostedAgentClient? _hostedAgents;
 
     public AiInferenceClient(HttpClient httpClient, AiInferenceOptions options)
     {
@@ -28,6 +29,9 @@ public sealed partial class AiInferenceClient : IAiInferenceClient
             var provider = CreateProvider(providerType, creds, httpClient, _log);
             _providers[providerType] = provider;
         }
+        if (options.Providers.TryGetValue(ProviderType.OpenAi, out var openAiCredentials) &&
+            !string.IsNullOrWhiteSpace(openAiCredentials.ApiKey))
+            _hostedAgents = new HostedAgentClient(httpClient, openAiCredentials.ApiKey);
     }
 
     public async Task<CompletionResponse<string>> CompleteAsync(CompletionRequest request, CancellationToken ct = default)
@@ -94,6 +98,30 @@ public sealed partial class AiInferenceClient : IAiInferenceClient
         }
 
     }
+
+    private HostedAgentClient HostedAgents => _hostedAgents
+        ?? throw new InvalidOperationException("OpenAI credentials are required for hosted agents. Call AddOpenAi first.");
+
+    public Task<HostedAgentSession> CreateHostedAgentSessionAsync(HostedAgentOptions options, CancellationToken ct = default)
+        => HostedAgents.CreateAsync(options, ct);
+
+    public Task<HostedAgentSession> GetHostedAgentSessionAsync(string sessionId, CancellationToken ct = default)
+        => HostedAgents.GetAsync(sessionId, ct);
+
+    public Task<IReadOnlyList<HostedAgentItem>> ListHostedAgentItemsAsync(string sessionId, CancellationToken ct = default)
+        => HostedAgents.ListItemsAsync(sessionId, ct);
+
+    public Task<IReadOnlyList<HostedAgentTurn>> ListHostedAgentTurnsAsync(string sessionId, CancellationToken ct = default)
+        => HostedAgents.ListTurnsAsync(sessionId, ct);
+
+    public IAsyncEnumerable<HostedAgentEvent> RunHostedAgentTurnAsync(string sessionId, string message, CancellationToken ct = default)
+        => HostedAgents.RunTurnAsync(sessionId, message, ct);
+
+    public Task CancelHostedAgentTurnAsync(string sessionId, CancellationToken ct = default)
+        => HostedAgents.CancelAsync(sessionId, ct);
+
+    public Task DeleteHostedAgentSessionAsync(string sessionId, CancellationToken ct = default)
+        => HostedAgents.DeleteAsync(sessionId, ct);
 
     private static IEnumerable<string> SplitStreamingText(string text)
     {

@@ -94,7 +94,17 @@ _ = client.TranscribeAudioAsync(new AudioTranscriptionRequest { Audio = [1, 2], 
 _ = client.GenerateSpeechAsync(new SpeechGenerationRequest { Text = "Hallo", Voice = "voice_481" });
 _ = client.StreamSpeechAsync(new SpeechGenerationRequest { Host = AudioHost.Mistral, Text = "Hallo", Voice = "voice_481" });
 
-Console.WriteLine("AOT audit app compiled.");
+using var hostedHttp = new HttpClient(new HostedAuditHandler());
+var hosted = new AiInferenceClient(hostedHttp, options);
+var session = await hosted.CreateHostedAgentSessionAsync(new HostedAgentOptions { Model = "gpt-6-astra" });
+_ = await hosted.GetHostedAgentSessionAsync(session.Id);
+_ = await hosted.ListHostedAgentItemsAsync(session.Id);
+_ = await hosted.ListHostedAgentTurnsAsync(session.Id);
+await foreach (var item in hosted.RunHostedAgentTurnAsync(session.Id, "AOT mock"))
+    if (item.IsRootTurn != true) throw new InvalidOperationException("Unexpected mock turn.");
+await hosted.CancelHostedAgentTurnAsync(session.Id);
+await hosted.DeleteHostedAgentSessionAsync(session.Id);
+Console.WriteLine("AOT audit app compiled; hosted-agent mock lifecycle passed.");
 
 public sealed record WeatherInfo
 {
@@ -111,4 +121,17 @@ internal sealed class AuditObserver : IToolIterationObserver
 [JsonSerializable(typeof(WeatherInfo))]
 internal partial class AotAuditJsonContext : JsonSerializerContext
 {
+}
+
+internal sealed class HostedAuditHandler : HttpMessageHandler
+{
+    protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+    {
+        var text = request.Method == HttpMethod.Get && request.RequestUri!.AbsolutePath.EndsWith("/events")
+            ? "data: {\"type\":\"agent.session.turn.completed\",\"turn\":{\"id\":\"root\",\"subagent_id\":null}}\n\n"
+            : request.RequestUri!.AbsolutePath.EndsWith("/items") || request.RequestUri.AbsolutePath.EndsWith("/turns")
+                ? "{\"data\":[],\"has_more\":false}"
+                : "{\"id\":\"sess_mock\",\"status\":\"idle\"}";
+        return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK) { Content = new StringContent(text) });
+    }
 }

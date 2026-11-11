@@ -13,6 +13,7 @@ Dual-targeted .NET 10 / .NET 11 AI inference client for OpenAI, Anthropic, Googl
 - **Structured output** — `CompleteAsync(..., JsonTypeInfo<T>)` for trim- and AOT-safe typed results
 - **Model registry** — first-class `AiModelCatalog` descriptors with endpoint/capability metadata
 - **Tool calling** — unified tool loop with streaming support, lives once in the facade
+- **Hosted agents** — OpenAI Agents API sessions with an OpenAI-hosted workspace, live events, web search, and service-side HTTP MCP
 - **Embeddings** — OpenAI and Google embedding models with batch support
 - **Image generation and editing** — GPT Image 2.5 Sunburst/Flare and Google Nano Banana 2.1, with multiple reference images
 - **Token metering** — `TokenUsage` on every response, with reasoning retained as a diagnostic subset of billed output tokens
@@ -21,6 +22,8 @@ Dual-targeted .NET 10 / .NET 11 AI inference client for OpenAI, Anthropic, Googl
 - **Thinking budget** — universal mapping across all providers that support reasoning
 - **Diagnostics** — `CompletionDiagnostics` exposes endpoint family, stop reason, and truncation hints
 - **AOT/trimming-first** — manual provider JSON construction/parsing where it reduces reflection risk and wire bloat
+
+The included [Inference Playground](playground/README.md) exercises normal chat and hosted agents through the library.
 
 ## Accounting inside tool dialogs
 

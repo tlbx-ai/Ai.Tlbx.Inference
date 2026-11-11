@@ -5,4 +5,7 @@
   <Folder Name="/tests/">
     <Project Path="tests/Ai.Tlbx.Inference.Tests/Ai.Tlbx.Inference.Tests.csproj" />
   </Folder>
+  <Folder Name="/playground/">
+    <Project Path="playground/Ai.Tlbx.Inference.Playground/Ai.Tlbx.Inference.Playground.csproj" />
+  </Folder>
 </Solution>

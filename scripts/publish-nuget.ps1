@@ -1,38 +1,9 @@
 [CmdletBinding(SupportsShouldProcess = $true)]
-param(
-    [Parameter(Mandatory = $true)]
-    [string]$Version
-)
-
+param([Parameter(Mandatory = $true)][ValidatePattern('^\d+\.\d+\.\d+$')][string]$Version)
 $ErrorActionPreference = 'Stop'
-
-if (-not $env:NUGET_API_KEY)
-{
-    throw 'NUGET_API_KEY is not set.'
-}
-
-$packagePath = Join-Path $PSScriptRoot "..\src\Ai.Tlbx.Inference\bin\Release\Ai.Tlbx.Inference.$Version.nupkg"
-$packagePath = [System.IO.Path]::GetFullPath($packagePath)
-
-if (-not (Test-Path $packagePath))
-{
-    throw "Package not found: $packagePath"
-}
-
-$arguments = @(
-    'nuget',
-    'push',
-    $packagePath,
-    '--api-key', $env:NUGET_API_KEY,
-    '--source', 'https://api.nuget.org/v3/index.json',
-    '--skip-duplicate'
-)
-
-if ($PSCmdlet.ShouldProcess($packagePath, 'Publish NuGet package and associated symbols'))
-{
-    & dotnet @arguments
-    if ($LASTEXITCODE -ne 0)
-    {
-        throw "NuGet publication failed with exit code $LASTEXITCODE."
-    }
+[xml]$props = Get-Content (Join-Path $PSScriptRoot '../Directory.Build.props')
+if ([string]$props.Project.PropertyGroup.Version -ne $Version) { throw 'Version must match Directory.Build.props.' }
+if ($PSCmdlet.ShouldProcess("Ai.Tlbx.Inference $Version", 'Start GitHub OIDC Trusted Publishing from master')) {
+    gh workflow run publish-nuget.yml --repo tlbx-ai/Ai.Tlbx.Inference --ref master -f "version=$Version"
+    if ($LASTEXITCODE -ne 0) { throw 'Could not start the publishing workflow.' }
 }

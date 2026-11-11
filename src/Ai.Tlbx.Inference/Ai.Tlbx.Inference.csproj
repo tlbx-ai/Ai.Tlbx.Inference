@@ -10,7 +10,7 @@
     <RepositoryType>git</RepositoryType>
     <PackageTags>ai;inference;openai;anthropic;google;gemini;xai;grok;llm;embeddings;tool-calling;streaming;attachments;aot;trimming</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>
-    <PackageReleaseNotes>Dual-target .NET 10 and .NET 11; validate both target frameworks and Native AOT. .NET 9 is no longer targeted.</PackageReleaseNotes>
+    <PackageReleaseNotes>Add beta OpenAI hosted-agent sessions, streaming, saved items, cancellation and service-side MCP through the inference facade. Dual-target .NET 10 and .NET 11. The separate web playground is not included in this package.</PackageReleaseNotes>
     <PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <NoWarn>CS1591</NoWarn>

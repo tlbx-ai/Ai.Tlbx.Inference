@@ -89,3 +89,4 @@ _ReSharper*/
 
 ## Publish
 publish/
+.playground-logs/

@@ -75,30 +75,12 @@ When making changes in this repo:
 
 ## Release Workflow
 
-If the user asks to publish a patch, minor, or major release, follow this exact sequence:
-
-1. Update the semantic version in `Directory.Build.props`.
-2. Run `dotnet build` and `dotnet test`; both must pass cleanly.
-3. Commit with message `Bump version to X.Y.Z`.
-4. Pack with:
-
-```powershell
-dotnet pack src\Ai.Tlbx.Inference\Ai.Tlbx.Inference.csproj -c Release -p:IncludeSymbols=true -p:SymbolPackageFormat=snupkg
-```
-
-5. Publish to NuGet with:
-
-```powershell
-.\scripts\publish-nuget.ps1 -Version X.Y.Z
-```
-
-6. Push the existing default branch (`master` in this repository); do not create or rename branches for a release.
-7. Create and push tag `vX.Y.Z`.
-8. Create the GitHub release with generated notes:
-
-```powershell
-gh release create vX.Y.Z --generate-notes
-```
+1. Keep the exact intended semantic version in `Directory.Build.props`.
+2. Run `pwsh -File scripts/verify-release.ps1`: clean build, unit tests on both frameworks, playground contracts, Native AOT publish/smoke on both frameworks. No paid provider tests run in this gate.
+3. Commit and push the existing default branch `master`; never create a release branch.
+4. Publish using `./scripts/publish-nuget.ps1 -Version X.Y.Z`. This dispatches `.github/workflows/publish-nuget.yml` from `master`. The workflow verifies, packs only the library, and uses `NuGet/login` OIDC through the master-only `nuget` environment. Do not use a stored API key.
+5. Wait for the exact run to finish. Retry the same version after a failed upload. NuGet policy must bind `tlbx-ai/Ai.Tlbx.Inference`, `publish-nuget.yml`, environment `nuget`, and package `Ai.Tlbx.Inference`.
+6. Create/push `vX.Y.Z` and the GitHub release with package and symbols. Verify exact public NuGet downloads and fresh-cache package-only consumers for net10/net11. The web playground is a separate `IsPackable=false` application and must never enter the package.
 
 ## Notes
 

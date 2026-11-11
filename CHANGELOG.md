@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.9.0 - 2026-11-11
+
+- Add beta OpenAI hosted-agent sessions through the inference facade: create/retrieve, streamed turns, saved items and usage, cancellation/deletion, web search and service-side MCP.
+- Include a separate, non-packable local web playground for normal chat and hosted agents.
+- Use GitHub OIDC Trusted Publishing instead of a stored NuGet API key; verify both .NET 10 and .NET 11, Native AOT and package contents before upload.
+- Hosted-agent HTTP behavior is covered with deterministic contracts. Paid live Agents API acceptance has not been run.
+
 ## 2.8.0 - 2026-11-11
 
 - Dual-target .NET 10 and .NET 11; .NET 9 is no longer targeted.

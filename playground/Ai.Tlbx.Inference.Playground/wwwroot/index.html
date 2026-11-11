@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Inference Playground</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <div class="shell">
+    <header><div><small>AI.TLBX.INFERENCE</small><h1>Inference Playground</h1></div><div class="meter"><strong id="costTotal">$0,0000</strong><span id="tokenTotal">0 Tokens · reine Modell-Tokenkosten</span><span id="budgetTotal">Geschätzte Tokenkosten · kein Ausgabenlimit</span></div></header>
+    <nav><button id="chatTab" class="active">Normaler Chat</button><button id="agentTab">Hosted Agent</button></nav>
+    <main>
+      <aside>
+        <section id="chatSettings">
+          <h2>Chat</h2>
+          <label>Modell<select id="chatModel"><option>Gpt6Luna</option><option>Gpt6Sol</option><option>Gpt61Sol</option></select></label>
+          <label>Systemanweisung<textarea id="systemMessage" rows="4" placeholder="Optional"></textarea></label>
+          <button id="clearChat" class="subtle">Verlauf leeren</button>
+        </section>
+        <section id="agentSettings" hidden>
+          <h2>Agent-Session</h2>
+          <label>Modell<input id="agentModel" value="gpt-6-astra"></label>
+          <label>Anweisungen<textarea id="agentInstructions" rows="4" placeholder="Optional"></textarea></label>
+          <label>Reasoning<select id="reasoning"><option value="">Standard</option><option>low</option><option>medium</option><option>high</option></select></label>
+          <label class="check"><input id="webSearch" type="checkbox"> Websuche</label>
+          <label class="check"><input id="network" type="checkbox"> Sandbox-Netzwerk</label>
+          <details><summary>Remote MCP</summary><label>Label<input id="mcpLabel" placeholder="mein-server"></label><label>HTTPS-URL<input id="mcpUrl" placeholder="https://…/mcp"></label><label>Erlaubte Tools<input id="mcpTools" placeholder="Optional, kommagetrennt"></label></details>
+          <p class="hint">Bash und Dateisystem laufen im OpenAI-Workspace. MCP-Tools führt der Agent über den angegebenen Server aus. Zugangsdaten gehören nicht in die URL.</p>
+          <button id="newSession" class="subtle">Neue Session</button>
+          <button id="cancelTurn" class="subtle" disabled>Turn abbrechen</button>
+          <button id="deleteSession" class="danger" disabled>Session löschen</button>
+          <div id="sessionInfo" class="session">Noch keine Session</div><div id="agentUsage" class="session"></div>
+        </section>
+      </aside>
+      <section class="conversation">
+        <div id="messages" class="messages"><div class="empty">Wähle einen Modus und stelle eine Frage.</div></div>
+        <div id="activity" class="activity" hidden></div>
+        <form id="composer"><textarea id="prompt" rows="3" placeholder="Nachricht eingeben…" required></textarea><div class="composerActions"><span id="status">Bereit</span><button type="submit" id="send">Senden ↗</button></div></form>
+      </section>
+    </main>
+  </div>
+</body>
+</html>
